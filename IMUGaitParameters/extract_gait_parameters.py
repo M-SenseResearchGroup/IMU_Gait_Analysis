@@ -1,6 +1,7 @@
 from matplotlib import pyplot as pl
 from scipy.signal import butter, filtfilt
 import numpy as np
+from scipy import stats
 import sys
 sys.path.append("C:\\Users\\Lukas Adamowicz\\Dropbox\\Masters\\MC10py")
 import MC10py
@@ -56,24 +57,23 @@ class GaitParameters:
                 print(f'Removing subject {s} data due to missing required sensors.')
                 self.data.pop(s)  # if missing required sensors, remove subject
 
-        self.subs = list(self.data.keys())  # get final list of subjects
+        _subs = list(self.data.keys())  # update list of subjects
         # get the full names of required sensors
-        self.sens = np.array([se for se in self.data[self.subs[0]] if any(j in se for j in _sens_req)])
+        self.sens = np.array([se for se in self.data[_subs[0]] if any(j in se for j in _sens_req)])
 
         # check for equal number of events
         _data_check = []
-        for s in self.subs:
-            _tdc = []
-            for se in self.sens:
-                _tdc.append(len([s for s in self.data[s][se]['accel'].keys() if self.ev_match in s]))
-            _data_check.append(_tdc)
+        for s in _subs:
+            # assume all sensors recorded the same events
+            _data_check.append(len([e for e in self.data[s][self.sens[0]]['accel'].keys() if self.ev_match in e]))
 
-        # check for unique vectors (per subject).  Should all be the same
-        _u, _uinv, _uc = np.unique(np.asarray(_data_check), return_inverse=True, return_counts=True, axis=0)
+        self.n_ev, _ = stats.mode(_data_check)
+        for i in range(len(_data_check)):
+            if _data_check[i] < self.n_ev:
+                print(f'Removing subject {_subs[i]} data due to missing events.')
+                self.data.pop(_subs[i])
 
-        # assume the column with the highest occurrences represents the expected events
-        _imax = np.argmax(_uc)
-        for i in range(len(_uinv)):
+        self.subs = list(self.data.keys())  # get final list of subjects
 
         self.gait_params = {i: dict() for i in self.data.keys()}  # pre-allocate storage for gait parameters
 
@@ -89,4 +89,4 @@ class GaitParameters:
 
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
-GaitParameters(raw_data)
+GaitParameters(raw_data, event_match='Walk and Turn')
