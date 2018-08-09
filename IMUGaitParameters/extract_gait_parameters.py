@@ -74,6 +74,7 @@ class GaitParameters:
                 self.data.pop(_subs[i])
 
         self.subs = list(self.data.keys())  # get final list of subjects
+        self.events = [e for e in self.data[self.subs[0]][self.sens[0]]['accel'].keys() if self.ev_match in e]
 
         self.gait_params = {i: dict() for i in self.data.keys()}  # pre-allocate storage for gait parameters
 
