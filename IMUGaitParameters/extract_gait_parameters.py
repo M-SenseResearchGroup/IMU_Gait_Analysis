@@ -88,10 +88,42 @@ class GaitParameters:
             self.alt_events = None
 
         # PRE-ALLOCATE storage for future use
-        self.data = {i: dict() for i in self.subs}  # pre-allocate storage for data
+        self.g = {i: {j: None for j in self.raw_data[i].keys()} for i in self.subs}  # standing gravity vector
+        # self.data = {i: dict() for i in self.subs}  # pre-allocate storage for data
         self.gait_params = {i: dict() for i in self.subs}  # pre-allocate storage for gait parameters
 
-    def _remove_bias(self, still_time=2):
+    def _mean_stillness(self, bias, i, ax, s, sensor, e, nst, plot):
+        mag = np.linalg.norm(self.raw_data[s][sensor]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
+
+        # calculate moving mean
+        _mm = np.cumsum(mag)
+        mm = _mm[nst - 1:]
+        mm[1:] = _mm[nst:] - _mm[:-nst]
+        mm /= nst
+
+        # determine minimum moving mean location
+        mind = np.argmin(mm) + nst - 1
+        var = np.var(mag[mind - nst:mind])
+
+        # store bias
+        for l in self.raw_data[s].keys():
+            bias[l][i, :] = np.mean(self.raw_data[s][l]['gyro'][e][mind - nst:mind, 1:], axis=0)
+
+        if plot:
+            ax[i].plot(self.raw_data[s][sensor]['gyro'][e][:, 0], mag, label=r'$||\vec{\omega}||$')
+            ax[i].plot(self.raw_data[s][sensor]['gyro'][e][mind - nst:mind, 0], mag[mind - nst:mind], color='r',
+                       alpha=0.5, linewidth=5, label=rf'Min. mean, $\sigma^2$={var:.3f}')
+            axt = ax[i].twinx()
+            axt.semilogy(self.raw_data[s][sensor]['gyro'][e][nst - 1:, 0], mm, color='orange')
+            axt.set_ylabel('Mean')
+
+            ax[i].set_title(f'{e}')
+            ax[i].legend(loc='best')
+
+        i += 1
+        return i, bias
+
+    def _calibration_detect(self, still_time=2, sensor='dorsal_foot_right', plot=False):
         """
         Detect the calibration points in the data using gyroscope data.
 
@@ -100,6 +132,10 @@ class GaitParameters:
         still_time : float, int, optional
             Amount of time in seconds to use for stillness detection.  If using an alternate event, this is the time
             that will be used for gyroscope bias elimination.
+        sensor : str, optional
+            Sensor to use for stillness detection.  Defaults to 'dorsal_foot_right'
+        plot : bool, optional
+            Plot raw data and chosen still segments.
         """
         if still_time < 0.5 and self.astill is not None:
             print(f'Input still_time of {still_time}s is too low for reliable results.  still_time set to 0.5s')
@@ -107,10 +143,8 @@ class GaitParameters:
         elif still_time > 1.5 and self.astill is None:
             print(f'Input still_time of {still_time}s is possibly too high to find a reliable still perdiod.')
 
-        pl.close('all')
-        bloc = 'dorsal_foot_right'
-        for s in ['1', '2']:
-            fr = 1000/(np.mean(np.diff(self.raw_data[s][bloc]['gyro'][self.events[0]][:, 0])))
+        for s in self.subs:
+            fr = 1000/(np.mean(np.diff(self.raw_data[s][sensor]['gyro'][self.events[0]][:, 0])))
             fnyq = fr/2  # nyquist frequency
             n1 = int(round(fr))  # samples in 1 second
             nst = int(round(still_time * n1))  # samples in still_time seconds
@@ -121,78 +155,50 @@ class GaitParameters:
                 # allocate storage for bias in each sensor
                 bias = {l: np.zeros((len(self.alt_events), 3)) for l in self.raw_data[s].keys()}
 
-                f, ax = pl.subplots(len(self.alt_events), figsize=(16, 9))
+                if plot:
+                    f, ax = pl.subplots(len(self.alt_events), figsize=(14, 8))
+                    f.suptitle(f'Subject: {s}')
+                else:
+                    ax = None
                 for e in self.alt_events:
-                    mag = np.linalg.norm(self.raw_data[s][bloc]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
+                    i, bias = self._mean_stillness(bias, i, ax, s, sensor, e, nst, plot)
 
-                    # calculate moving mean
-                    _mm = np.cumsum(mag)
-                    mm = _mm[nst-1:]
-                    mm[1:] = _mm[nst:] - _mm[:-nst]
-                    mm /= nst
-
-                    # determine minimum moving mean location
-                    mind = np.argmin(mm) + nst - 1
-                    var = np.var(mag[mind-nst:mind])
-
-                    # store bias
-                    for l in self.raw_data[s].keys():
-                        bias[l][i, :] = np.mean(self.raw_data[s][l]['gyro'][e][mind-nst:mind, 1:], axis=0)
-
-                    ax[i].plot(self.raw_data[s][bloc]['gyro'][e][:, 0], mag, label=r'$||\vec{\omega}||$')
-                    ax[i].plot(self.raw_data[s][bloc]['gyro'][e][mind-nst:mind, 0], mag[mind-nst:mind], color='r',
-                               alpha=0.5, linewidth=5, label=rf'Min. mean, $\sigma^2$={var:.3f}')
-                    axt = ax[i].twinx()
-                    axt.semilogy(self.raw_data[s][bloc]['gyro'][e][nst-1:, 0], mm, color='orange')
-                    axt.set_ylabel('Mean')
-
-                    ax[i].set_title(f'{e}')
-                    ax[i].legend(loc='best')
-
-                    i += 1
-
-                f.tight_layout()
+                if plot:
+                    f.tight_layout(rect=[0, 0.03, 1, 0.95])
             else:
                 # allocate storage for bias in each sensor
                 bias = {l: np.zeros((self.n_ev, 3)) for l in self.raw_data[s].keys()}
 
-                f, ax = pl.subplots(self.n_ev, figsize=(16, 9))
+                if plot:
+                    f, ax = pl.subplots(self.n_ev, figsize=(14, 8))
+                    f.suptitle(f'Subject: {s}')
+                else:
+                    ax = None
                 for e in self.events:
-                    mag = np.linalg.norm(self.raw_data[s][bloc]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
+                    i, bias = self._mean_stillness(bias, i, ax, s, sensor, e, nst, plot)
 
-                    # TODO determine in first few seconds only, or add option
-                    # calculate moving mean
-                    _mm = np.cumsum(mag)
-                    mm = _mm[nst - 1:]
-                    mm[1:] = _mm[nst:] - _mm[:-nst]
-                    mm /= nst
-
-                    # determine minimum moving mean location
-                    mind = np.argmin(mm) + nst
-                    var = np.var(mag[mind - nst:mind])
-
-                    # store bias
-                    for l in self.raw_data[s].keys():
-                        bias[l][i, :] = np.mean(self.raw_data[s][l]['gyro'][e][mind - nst:mind, 1:], axis=0)
-
-                    ax[i].plot(self.raw_data[s][bloc]['gyro'][e][:, 0], mag, label=r'$||\vec{\omega}||$')
-                    ax[i].plot(self.raw_data[s][bloc]['gyro'][e][mind - nst:mind, 0], mag[mind - nst:mind], color='r',
-                               alpha=0.5, linewidth=5, label=rf'Min. mean, $\sigma^2$={var:.3f}')
-                    axt = ax[i].twinx()
-                    axt.semilogy(self.raw_data[s][bloc]['gyro'][e][nst - 1:, 0], mm, color='orange')
-                    axt.set_ylabel('Mean')
-
-                    ax[i].set_title(f'{e}')
-                    ax[i].legend(loc='best')
-
-                    i += 1
-
-                f.tight_layout()
+                if plot:
+                    f.tight_layout(rect=[0, 0.03, 1, 0.95])
 
             # remove bias from all sensors and events
             for l in self.raw_data[s].keys():
                 for e in self.raw_data[s][l]['gyro'].keys():
                     self.raw_data[s][l]['gyro'][e][:, 1:] -= np.mean(bias[l], axis=0)
+
+    def _determine_gravity(self, plot=False):
+        """
+        Determine gravity for trials of interest
+
+        Parameters
+        ----------
+        plot : bool, optional
+            Plot results.  Defaults to False.
+        """
+        b, a = signal.ellip(5, 1, 60, 1/31.25)
+
+        for s in ['1', '2']:
+            if plot:
+                f, ax = pl.subplots(self.n_ev, figsize=(13, 8))
 
     def _turn_detect(self, plot=False):
         pl.close('all')  # close all open plots before running
@@ -208,4 +214,5 @@ class GaitParameters:
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
-test._remove_bias(still_time=6)
+test._calibration_detect(still_time=6)
+# test._determine_gravity(plot=True)
