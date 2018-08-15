@@ -292,7 +292,7 @@ class GaitParameters:
                     pos_n[:, 0] = np.array([0, 0, 0])
 
                     # pre-allocate storage for distance traveled used for altitude plots
-                    distance = np.zeros((1, n-1))
+                    distance = np.zeros(n)
                     distance[0] = 0
 
                     # Error covariance matrix
@@ -325,7 +325,7 @@ class GaitParameters:
 
                         # TODO check lstsq result
                         # orientation estimation
-                        C = C_prev @ np.linalg.lstsq(2*np.identity(3) + wm*dt, 2*np.identity(3) - wm*dt)[0]
+                        C = C_prev @ np.linalg.lstsq(2*np.identity(3) + wm*dt, 2*np.identity(3) - wm*dt, rcond=None)[0]
 
                         # transform the acceleration into the navigational frame
                         acc_n[:, i] = 0.5*(C + C_prev) @ self.raw_data[s][l]['accel'][e][i, 1:]
@@ -362,7 +362,7 @@ class GaitParameters:
 
                             # TODO check lstsq result
                             # Kalman Gain
-                            K, _, _, _ = np.linalg.lstsq((P @ H.transpose()).T, H @ P @ H.transpose() + R)
+                            K, _, _, _ = np.linalg.lstsq((P @ H.transpose()).T, H @ P @ H.transpose() + R, rcond=None)
 
                             # update the filter state
                             delta_x = K @ vel_n[:, i]
@@ -384,7 +384,7 @@ class GaitParameters:
 
                             # TODO check lstsq result
                             # correct orientation
-                            C = np.linalg.lstsq(2*np.identity(3)+ang_mat, 2*np.identity(3)-ang_mat)[0] @ C
+                            C = np.linalg.lstsq(2*np.identity(3)+ang_mat, 2*np.identity(3)-ang_mat, rcond=None)[0] @ C
 
                             # correct position and velocity estimates
                             vel_n[:, i] -= vel_e
@@ -415,8 +415,8 @@ class GaitParameters:
                         C_prev = C.copy()  # Save orientation estimate, required at start of main loop
 
                         # compute horizontal distance
-                        distance[0, i] = distance[0, i-1] + np.sqrt((pos_n[0, i]-pos_n[0, i-1])**2 +
-                                                                    (pos_n[1, i]-pos_n[0, i-1])**2)
+                        distance[i] = distance[i-1] + np.sqrt((pos_n[0, i]-pos_n[0, i-1])**2 +
+                                                              (pos_n[1, i]-pos_n[0, i-1])**2)
 
 
 
