@@ -1,7 +1,7 @@
 from matplotlib import pyplot as pl
 from scipy import signal
 import numpy as np
-from numpy import sin, cos, arcsin, arccos, arctan
+from numpy import sin, cos, arcsin, arccos, arctan, arctan2
 from scipy import stats
 import sys
 sys.path.append("C:\\Users\\Lukas Adamowicz\\Dropbox\\Masters\\MC10py")
@@ -254,9 +254,11 @@ class GaitParameters:
                                                                            self.raw_data[s][l]['gyro'][e][:, 1:],
                                                                            self.g[s][l], self.zt)
 
+                    fs = 1/np.mean(np.diff(self.raw_data[s][l]['accel'][e][:, 0]))
+
                     n, a = self.raw_data[s][l]['accel'][e][:, 1:].shape  # get data size
 
-                    state = np.ones((1, n))  # pre-allocate for state storage
+                    state = np.ones(n)  # pre-allocate for state storage
                     state[0] = 0
                     statef = np.copy(state)  # pre-allocate for smoothed state
 
@@ -274,7 +276,7 @@ class GaitParameters:
 
                     # pre-allocate storage for heading direction.  Indicates direction subject is facing, and not
                     # necessarily the direction of travel
-                    heading = np.zeros((1, n))
+                    heading = np.zeros(n)
                     heading[0] = yaw
 
                     # pre-allocate storage for acceleration in navigational frame
@@ -307,6 +309,10 @@ class GaitParameters:
                     sigma_v = 1e-3
                     R = np.diag([sigma_v]*3)**2
 
+                    wmax = 0
+                    start_swing = 0
+                    start_stance = 0
+
                     # Main loop for Kalman Filter
                     for i in range(1, n):
                         # START INS (transformation, double integration)
@@ -317,8 +323,9 @@ class GaitParameters:
                                        [self.raw_data[s][l]['gyro'][e][i, 3], 0, -self.raw_data[s][l]['gyro'][e][i, 1]],
                                        [-self.raw_data[s][l]['gyro'][e][i, 2], self.raw_data[s][l]['gyro'][e][i, 1], 0]])
 
+                        # TODO check lstsq result
                         # orientation estimation
-                        C = C_prev @ (2*np.identity(3) + wm*dt)/(2*np.identity(3) - wm*dt)
+                        C = C_prev @ np.linalg.lstsq(2*np.identity(3) + wm*dt, 2*np.identity(3) - wm*dt)[0]
 
                         # transform the acceleration into the navigational frame
                         acc_n[:, i] = 0.5*(C + C_prev) @ self.raw_data[s][l]['accel'][e][i, 1:]
@@ -349,11 +356,13 @@ class GaitParameters:
                         # END of INS
 
                         # stance phase detection and zero-velocity updates
-                        if zind(i):
+                        if zind[i]:
                             # START Kalman Filter zero-velocity updates
                             state[i] = 0  # stance
 
-                            K = (P @ H.transpose())/(H @ P @ H.transpose() + R)  # Kalman Gain
+                            # TODO check lstsq result
+                            # Kalman Gain
+                            K, _, _, _ = np.linalg.lstsq((P @ H.transpose()).T, H @ P @ H.transpose() + R)
 
                             # update the filter state
                             delta_x = K @ vel_n[:, i]
@@ -366,6 +375,48 @@ class GaitParameters:
                             pos_e = delta_x[3:6]
                             vel_e = delta_x[6:]
                             # END Kalman Filter zero-velocity update
+
+                            # APPLY corrections to INS estimates
+                            # skew symmetric matrix for small angles to correct orientation
+                            ang_mat = -np.array([[0, -attitude_e[2], attitude_e[1]],
+                                                 [attitude_e[2], 0, -attitude_e[0]],
+                                                 [-attitude_e[1], attitude_e[0], 0]])
+
+                            # TODO check lstsq result
+                            # correct orientation
+                            C = np.linalg.lstsq(2*np.identity(3)+ang_mat, 2*np.identity(3)-ang_mat)[0] @ C
+
+                            # correct position and velocity estimates
+                            vel_n[:, i] -= vel_e
+                            pos_n[:, i] -= pos_e
+
+                        # smooth states
+                        statef[i] = state[i]
+
+                        if state[i]-state[i-1] == 1:  # 0 (stance) -> 1 (swing)
+                            # deal with false positive stance
+                            if (i - start_stance)/fs <= self.mst:
+                                statef[start_stance:i] = 1
+                            start_swing = i
+                            wmax = 0
+
+                        if np.linalg.norm(self.raw_data[s][l]['gyro'][e][i, :]) > wmax:
+                            wmax = np.linalg.norm(self.raw_data[s][l]['gyro'][e][i, :])
+
+                        if state[i]-state[i-1] == -1:  # 1 (swing) -> 0 (stance)
+                            # deal with false positive
+                            if wmax < self.swt:
+                                statef[start_swing:i] = 0
+                            start_stance = i
+
+                        # Estimate and save the yaw of the sensor (different than direction of travel)
+                        # unused here but potentially useful for orienting a GUI
+                        heading[i] = arctan2(C[1, 0], C[0, 0])
+                        C_prev = C.copy()  # Save orientation estimate, required at start of main loop
+
+                        # compute horizontal distance
+                        distance[0, i] = distance[0, i-1] + np.sqrt((pos_n[0, i]-pos_n[0, i-1])**2 +
+                                                                    (pos_n[1, i]-pos_n[0, i-1])**2)
 
 
 
