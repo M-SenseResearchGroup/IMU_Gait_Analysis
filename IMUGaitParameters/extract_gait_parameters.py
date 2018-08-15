@@ -1,6 +1,7 @@
 from matplotlib import pyplot as pl
 from scipy import signal
 import numpy as np
+from numpy import sin, cos, arcsin, arccos, arctan
 from scipy import stats
 import sys
 sys.path.append("C:\\Users\\Lukas Adamowicz\\Dropbox\\Masters\\MC10py")
@@ -92,7 +93,7 @@ class GaitParameters:
         # self.data = {i: dict() for i in self.subs}  # pre-allocate storage for data
         self.gait_params = {i: dict() for i in self.subs}  # pre-allocate storage for gait parameters
 
-    def _mean_stillness(self, bias, i, ax, s, sensor, e, nst, plot):
+    def _mean_stillness(self, bias, grav, i, ax, s, sensor, e, nst, plot):
         mag = np.linalg.norm(self.raw_data[s][sensor]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
 
         # calculate moving mean
@@ -102,12 +103,13 @@ class GaitParameters:
         mm /= nst
 
         # determine minimum moving mean location
-        mind = np.argmin(mm) + nst - 1
+        mind = np.argmin(mm) + nst
         var = np.var(mag[mind - nst:mind])
 
         # store bias
         for l in self.raw_data[s].keys():
-            bias[l][i, :] = np.mean(self.raw_data[s][l]['gyro'][e][mind - nst:mind, 1:], axis=0)
+            bias[l][i, :] = np.median(self.raw_data[s][l]['gyro'][e][mind - nst:mind, 1:], axis=0)
+            grav[l][i, :] = np.median(self.raw_data[s][l]['accel'][e][mind - nst:mind, 1:], axis=0)
 
         if plot:
             ax[i].plot(self.raw_data[s][sensor]['gyro'][e][:, 0], mag, label=r'$||\vec{\omega}||$')
@@ -144,7 +146,7 @@ class GaitParameters:
             print(f'Input still_time of {still_time}s is possibly too high to find a reliable still perdiod.')
 
         for s in self.subs:
-            fr = 1000/(np.mean(np.diff(self.raw_data[s][sensor]['gyro'][self.events[0]][:, 0])))
+            fr = 1/(np.mean(np.diff(self.raw_data[s][sensor]['gyro'][self.events[0]][:, 0])))  # time in seconds
             fnyq = fr/2  # nyquist frequency
             n1 = int(round(fr))  # samples in 1 second
             nst = int(round(still_time * n1))  # samples in still_time seconds
@@ -152,8 +154,9 @@ class GaitParameters:
             i = 0
 
             if self.alt_events is not None:
-                # allocate storage for bias in each sensor
+                # allocate storage for bias and gravity in each sensor
                 bias = {l: np.zeros((len(self.alt_events), 3)) for l in self.raw_data[s].keys()}
+                grav = {l: np.zeros((len(self.alt_events), 3)) for l in self.raw_data[s].keys()}
 
                 if plot:
                     f, ax = pl.subplots(len(self.alt_events), figsize=(14, 8))
@@ -161,13 +164,14 @@ class GaitParameters:
                 else:
                     ax = None
                 for e in self.alt_events:
-                    i, bias = self._mean_stillness(bias, i, ax, s, sensor, e, nst, plot)
+                    i, bias = self._mean_stillness(bias, grav, i, ax, s, sensor, e, nst, plot)
 
                 if plot:
                     f.tight_layout(rect=[0, 0.03, 1, 0.95])
             else:
-                # allocate storage for bias in each sensor
+                # allocate storage for bias and gravity in each sensor
                 bias = {l: np.zeros((self.n_ev, 3)) for l in self.raw_data[s].keys()}
+                grav = {l: np.zeros((len(self.alt_events), 3)) for l in self.raw_data[s].keys()}
 
                 if plot:
                     f, ax = pl.subplots(self.n_ev, figsize=(14, 8))
@@ -175,30 +179,16 @@ class GaitParameters:
                 else:
                     ax = None
                 for e in self.events:
-                    i, bias = self._mean_stillness(bias, i, ax, s, sensor, e, nst, plot)
+                    i, bias = self._mean_stillness(bias, grav, i, ax, s, sensor, e, nst, plot)
 
                 if plot:
                     f.tight_layout(rect=[0, 0.03, 1, 0.95])
 
             # remove bias from all sensors and events
             for l in self.raw_data[s].keys():
+                self.g[s][l] = np.mean(grav[l], axis=0)
                 for e in self.raw_data[s][l]['gyro'].keys():
                     self.raw_data[s][l]['gyro'][e][:, 1:] -= np.mean(bias[l], axis=0)
-
-    def _determine_gravity(self, plot=False):
-        """
-        Determine gravity for trials of interest
-
-        Parameters
-        ----------
-        plot : bool, optional
-            Plot results.  Defaults to False.
-        """
-        b, a = signal.ellip(5, 1, 60, 1/31.25)
-
-        for s in ['1', '2']:
-            if plot:
-                f, ax = pl.subplots(self.n_ev, figsize=(13, 8))
 
     def _turn_detect(self, plot=False):
         pl.close('all')  # close all open plots before running
@@ -211,8 +201,175 @@ class GaitParameters:
             for e in self.events:
                 pass  # do after finding still spot in data?
 
+    @staticmethod
+    def _calculate_stillness_factor(a, w, g, z_thresh):
+        """
+        Calculate the 'distance from stillness' or stillness factor zed
+
+        Parameters
+        ----------
+        a : array_like
+            N x 3 array of acceleration data
+        w : array_like
+            N x 3 array of angular velocity data
+        g : array_like
+            3D vector of gravity.
+        z_thresh : float
+            Stillness threshold.  Used to determine if sensor is still or not.
+
+        Returns
+        -------
+        zed : array_like
+            N x 1 array of stillness factor
+        zind : array_like
+            M x 1 array of indices where zed is less than the threshold z_thresh
+        """
+        za = stats.zscore(a-g)  # z-score of acceleration less standing still gravity vector, Nx3 vector ouput
+        zw = stats.zscore(w)  # z-score of gyroscope, bias has already been removed, Nx3 vector output
+
+        zed = np.sqrt(np.sum(zw**2, axis=1) + np.sum(za**2, axis=1))  # sum of squares of z-scores
+        zind = abs(zed) < z_thresh
+
+        return zed, zind.flatten()
+
+    def process_data(self):
+        """
+        Process the raw data and run it through a Kalman Filter to obtain heading and other signals
+        used to calculate gait parameters
+        """
+        # sensors used
+        sensors = ['dorsal_foot_right', 'dorsal_foot_left']
+
+        for s in ['1', '2']:  # self.subs:
+            for l in sensors:
+                for e in self.events:
+                    if np.linalg.norm(self.g[s][l]) < 1.5:  # if the magnitude of gravity is less than 1.5
+                        # ie gravity units are in G's
+                        self.raw_data[s][l]['accel'][e][:, 1:] *= 9.81  # convert to m/s^2 from g
+                        self.g[s][l] *= 9.81  # convert to m/s^2 from g
+                    if self.raw_data[s][l]['gyro'][e][:, 1:].max() > 50:  # if data is clearly in deg/s
+                        self.raw_data[s][l]['gyro'][e][:, 1:] *= np.pi/180  # convert to rad/s
+
+                    zed, zind = GaitParameters._calculate_stillness_factor(self.raw_data[s][l]['accel'][e][:, 1:],
+                                                                           self.raw_data[s][l]['gyro'][e][:, 1:],
+                                                                           self.g[s][l], self.zt)
+
+                    n, a = self.raw_data[s][l]['accel'][e][:, 1:].shape  # get data size
+
+                    state = np.ones((1, n))  # pre-allocate for state storage
+                    state[0] = 0
+                    statef = np.copy(state)  # pre-allocate for smoothed state
+
+                    # calculate Euler angles assuming stationary sensor
+                    pitch = np.mean(-arcsin(self.raw_data[s][l]['accel'][e][0, 1]/np.linalg.norm(self.g[s][l])))
+                    roll = np.mean(arctan(self.raw_data[s][l]['accel'][e][0, 2]/self.raw_data[s][l]['accel'][e][0, 3]))
+                    yaw = 0
+
+                    # Rotation matrix?
+                    C = np.array([[cos(pitch), sin(roll)*sin(pitch), cos(roll)*cos(pitch)],
+                                  [0, cos(roll), -sin(roll)],
+                                  [-sin(pitch), sin(roll)*cos(pitch), cos(roll)*cos(pitch)]])
+
+                    C_prev = C.copy()
+
+                    # pre-allocate storage for heading direction.  Indicates direction subject is facing, and not
+                    # necessarily the direction of travel
+                    heading = np.zeros((1, n))
+                    heading[0] = yaw
+
+                    # pre-allocate storage for acceleration in navigational frame
+                    acc_n = np.zeros((3, n))
+                    acc_n[:, 0] = C @ self.raw_data[s][l]['accel'][e][0, 1:]
+
+                    # pre-allocate storage for velocity in navigational frame, with initial velocity assumed to be 0
+                    vel_n = np.zeros((3, n))
+                    vel_n[:, 0] = np.array([0, 0, 0])
+
+                    # pre-allocate storage for position in navigational frame.  Initial position arbitrarily set to 0
+                    pos_n = np.zeros((3, n))
+                    pos_n[:, 0] = np.array([0, 0, 0])
+
+                    # pre-allocate storage for distance traveled used for altitude plots
+                    distance = np.zeros((1, n-1))
+                    distance[0] = 0
+
+                    # Error covariance matrix
+                    P = np.zeros((9, 9))
+
+                    # process noise parameter, gyroscope and accelerometer noise
+                    sigma_omega = 1e-2
+                    sigma_a = 1e-2
+
+                    # ZUPT measurement matrix
+                    H = np.concatenate((np.zeros((3, 3)), np.zeros((3, 3)), np.identity(3)), axis=1)
+
+                    # ZUPT measurement noise covariance matrix
+                    sigma_v = 1e-3
+                    R = np.diag([sigma_v]*3)**2
+
+                    # Main loop for Kalman Filter
+                    for i in range(1, n):
+                        # START INS (transformation, double integration)
+                        dt = self.raw_data[s][l]['accel'][e][i, 0] - self.raw_data[s][l]['accel'][e][i-1, 0]  # seconds
+
+                        # skew symmetric matrix for angular rates
+                        wm = np.array([[0, -self.raw_data[s][l]['gyro'][e][i, 3], self.raw_data[s][l]['gyro'][e][i, 2]],
+                                       [self.raw_data[s][l]['gyro'][e][i, 3], 0, -self.raw_data[s][l]['gyro'][e][i, 1]],
+                                       [-self.raw_data[s][l]['gyro'][e][i, 2], self.raw_data[s][l]['gyro'][e][i, 1], 0]])
+
+                        # orientation estimation
+                        C = C_prev @ (2*np.identity(3) + wm*dt)/(2*np.identity(3) - wm*dt)
+
+                        # transform the acceleration into the navigational frame
+                        acc_n[:, i] = 0.5*(C + C_prev) @ self.raw_data[s][l]['accel'][e][i, 1:]
+
+                        # velocity and position using trapezoidal integration
+                        gz = np.array([0, 0, np.linalg.norm(self.g[s][l])])
+                        vel_n[:, i] = vel_n[:, i-1] + ((acc_n[:, i] - gz) + (acc_n[:, i-1] - gz))*dt/2
+                        pos_n[:, i] = pos_n[:, i-1] + (vel_n[:, i] + vel_n[:, i-1])*dt/2
+
+                        # skew symmetric matrix from navigational frame acceleration
+                        S = np.array([[0, -acc_n[2, i], acc_n[1, i]],
+                                      [acc_n[2, i], 0, -acc_n[0, i]],
+                                      [-acc_n[1, i], acc_n[0, i], 0]])
+
+                        # create state transition matrix
+                        _r1 = np.concatenate((np.identity(3), np.zeros((3, 3)), np.zeros((3, 3))), axis=1)
+                        _r2 = np.concatenate((np.zeros((3, 3)), np.identity(3), dt*np.identity(3)), axis=1)
+                        _r3 = np.concatenate((-dt*S, np.zeros((3, 3)), np.identity(3)), axis=1)
+
+                        F = np.concatenate((_r1, _r2, _r3), axis=0)
+
+                        # compute the process noise covariance
+                        Q = np.diag([sigma_omega, sigma_omega, sigma_omega, 0, 0, 0, sigma_a, sigma_a, sigma_a])**2
+
+                        # propagate the error covariance matrix
+                        P = F @ P @ np.linalg.inv(F) + Q
+
+                        # END of INS
+
+                        # stance phase detection and zero-velocity updates
+                        if zind(i):
+                            # START Kalman Filter zero-velocity updates
+                            state[i] = 0  # stance
+
+                            K = (P @ H.transpose())/(H @ P @ H.transpose() + R)  # Kalman Gain
+
+                            # update the filter state
+                            delta_x = K @ vel_n[:, i]
+
+                            # update the error covariance matrix
+                            P = (np.identity(9) - K @ H) @ P  # simplified covariance update found in most books
+
+                            # extract errors from the KF states
+                            attitude_e = delta_x[:3]
+                            pos_e = delta_x[3:6]
+                            vel_e = delta_x[6:]
+                            # END Kalman Filter zero-velocity update
+
+
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
 test._calibration_detect(still_time=6)
-# test._determine_gravity(plot=True)
+test.process_data()
