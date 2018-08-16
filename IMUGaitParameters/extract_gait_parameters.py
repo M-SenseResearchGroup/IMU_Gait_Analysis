@@ -42,7 +42,6 @@ class GaitParameters:
         """
 
         # TODO update parameter descriptions with more information
-
         # assign variables to class attributes
         self.raw_data = data
         self.zt = z_thresh
@@ -79,12 +78,13 @@ class GaitParameters:
                 self.raw_data.pop(_subs[i])
 
         self.subs = list(self.raw_data.keys())  # get final list of subjects
+
         # get a list of events of interest
         self.events = [e for e in self.raw_data[self.subs[0]][self.sens[0]]['accel'].keys() if event_match in e]
+
         # get a list of events for alternate still period detection
         if self.astill != '':
-            self.alt_events = [e for e in self.raw_data[self.subs[0]][self.sens[0]]['accel'].keys()
-                               if self.astill in e]
+            self.alt_events = [e for e in self.raw_data[self.subs[0]][self.sens[0]]['accel'].keys() if self.astill in e]
         else:
             self.alt_events = None
 
@@ -123,6 +123,7 @@ class GaitParameters:
             ax[i].legend(loc='best')
 
         i += 1
+
         return i, bias
 
     def _calibration_detect(self, still_time=2, sensor='dorsal_foot_right', plot=False):
@@ -191,15 +192,55 @@ class GaitParameters:
                     self.raw_data[s][l]['gyro'][e][:, 1:] -= np.mean(bias[l], axis=0)
 
     def _turn_detect(self, plot=False):
+        """
+        Detect 180 degree turns in walking data
+        """
         pl.close('all')  # close all open plots before running
 
-        for s in self.subs:  # iterate through each subject
+        events = self.events.copy()
+        l = 'sacrum'  # body location to look through
+        for s in ['1', '2']:  # self.subs:  # iterate through each subject
             if plot:
                 f, ax = pl.subplots(self.n_ev, figsize=(14, 9))
 
             i = 0
+            fs = 1/np.mean(np.diff(self.raw_data[s][l]['accel'][self.events[0]][:, 0]))  # sampling frequency
+            fnyq = fs/2  # nyquist frequency
+            tb, ta = signal.butter(1, 1.5/fnyq, 'lowpass')  # filter gyro data to see turns clearly
             for e in self.events:
-                pass  # do after finding still spot in data?
+                # determine index closest to global z axis (direction of gravity).
+                iz = np.argmax(self.g[s][l])
+
+                # filter gyroscopic data
+                fd = abs(signal.filtfilt(tb, ta, self.raw_data[s][l]['gyro'][e][:, iz]))
+                mfd = np.mean(fd)  # mean of filtered data
+
+                # find peak indices in the filtered data
+                _ips = signal.argrelmax(fd, order=63, mode='wrap')
+                # exclude any peaks less than 2x the mean of the filtered data
+                ip = _ips[0][np.argwhere(fd[_ips] > 2*mfd)].flatten()
+                turns = []
+                for k in range(len(ip)):
+                    i_bef = np.argwhere(fd[:ip[k]] < 1.25*mfd).flatten()
+                    i_aft = np.argwhere(fd[ip[k]:] < 1.25*mfd).flatten()
+
+                    if i_bef.size > 0 and i_aft.size > 0:
+                        turns.append((i_bef[-1], ip[k], i_aft[0] + ip[k]))
+                    elif i_bef.size == 0:
+                        turns.append((0, ip[k], i_aft[0] + ip[k]))
+                    elif i_aft.size == 0:
+                        turns.append((i_bef[-1], ip[k], len(fd)-1))
+
+                if plot:
+                    i1 = np.array([j[slice(0, 3, 2)] for j in turns]).flatten()
+                    i2 = np.array([j[1] for j in turns])
+                    # ax[i].plot(self.raw_data[s][l]['gyro'][e][:, 0], self.raw_data[s][l]['gyro'][e][:, iz])
+                    ax[i].plot(self.raw_data[s][l]['gyro'][e][:, 0], fd)
+                    ax[i].plot(self.raw_data[s][l]['gyro'][e][i2, 0], fd[i2], 'ro')
+                    ax[i].plot(self.raw_data[s][l]['gyro'][e][i1, 0], fd[i1], 'k+')
+                    ax[i].set_title(f'{e}')
+
+                i += 1
 
     @staticmethod
     def _calculate_stillness_factor(a, w, g, z_thresh):
@@ -258,7 +299,7 @@ class GaitParameters:
         # TODO add inputs to effect sigma and other variables set down below
         fs = 1 / np.mean(np.diff(t))
 
-        n, a = a.shape  # get data size
+        n, m = a.shape  # get data size
 
         state = np.ones(n)  # pre-allocate for state storage
         state[0] = 0
@@ -423,6 +464,7 @@ class GaitParameters:
         return acc_n, vel_n, pos_n, state, statef
 
 
+
     def process_data(self):
         """
         Process the raw data and run it through a Kalman Filter to obtain heading and other signals
@@ -445,11 +487,13 @@ class GaitParameters:
                                                                            self.raw_data[s][l]['gyro'][e][:, 1:],
                                                                            self.g[s][l], self.zt)
 
-
-
-
+                    a_n, v_n, p_n, state, statef = GaitParameters._kalman_filter(self.raw_data[s][l]['accel'][e][:, 0],
+                                                                                 self.raw_data[s][l]['accel'][e][:, 1:],
+                                                                                 self.raw_data[s][l]['gyro'][e][:, 1:],
+                                                                                 self.g[s][l], zind, self.mst, self.swt)
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
 test._calibration_detect(still_time=6)
-test.process_data()
+test._turn_detect(plot=True)
+# test.process_data()
