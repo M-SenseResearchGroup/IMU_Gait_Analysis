@@ -90,7 +90,7 @@ class GaitParameters:
 
         # PRE-ALLOCATE storage for future use
         self.g = {i: {j: None for j in self.raw_data[i].keys()} for i in self.subs}  # standing gravity vector
-        # self.data = {i: dict() for i in self.subs}  # pre-allocate storage for data
+        self.data = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # pre-allocate storage for data
         self.gait_params = {i: dict() for i in self.subs}  # pre-allocate storage for gait parameters
 
     def _mean_stillness(self, bias, grav, i, ax, s, sensor, e, nst, plot):
@@ -197,19 +197,19 @@ class GaitParameters:
         """
         pl.close('all')  # close all open plots before running
 
-        events = self.events.copy()
+        events = []
         l = 'sacrum'  # body location to look through
-        for s in ['1', '2']:  # self.subs:  # iterate through each subject
+        for s in self.subs:  # iterate through each subject
             if plot:
                 f, ax = pl.subplots(self.n_ev, figsize=(14, 9))
 
             i = 0
             fs = 1/np.mean(np.diff(self.raw_data[s][l]['accel'][self.events[0]][:, 0]))  # sampling frequency
             fnyq = fs/2  # nyquist frequency
-            tb, ta = signal.butter(1, 1.5/fnyq, 'lowpass')  # filter gyro data to see turns clearly
+            tb, ta = signal.butter(2, .75/fnyq, 'lowpass')  # filter gyro data to see turns clearly
             for e in self.events:
                 # determine index closest to global z axis (direction of gravity).
-                iz = np.argmax(self.g[s][l])
+                iz = np.argmax(abs(self.g[s][l])) + 1  # +1 because first index is time in raw data
 
                 # filter gyroscopic data
                 fd = abs(signal.filtfilt(tb, ta, self.raw_data[s][l]['gyro'][e][:, iz]))
@@ -231,6 +231,35 @@ class GaitParameters:
                     elif i_aft.size == 0:
                         turns.append((i_bef[-1], ip[k], len(fd)-1))
 
+                if len(turns) == 1:
+                    for loc in self.raw_data[s].keys():
+                        for imu in ['accel', 'gyro']:
+                            self.data[s][loc][imu] = dict()
+                            self.data[s][loc][imu][e+'-1'] = self.raw_data[s][loc][imu][e][:turns[0][0], :]
+                            self.data[s][loc][imu][e+'-2'] = self.raw_data[s][loc][imu][e][turns[0][-1]:, :]
+                elif len(turns) == 2:
+                    for loc in self.raw_data[s].keys():
+                        for imu in ['accel', 'gyro']:
+                            self.data[s][loc][imu] = dict()
+                            if turns[0][1] < turns[1][1]:
+                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:turns[0][0], :]
+                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][
+                                                                   turns[0][-1]:turns[1][0], :]
+                            else:
+                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][
+                                                                   turns[0][-1]:turns[1][0], :]
+                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][turns[1][-1]:, :]
+                elif len(turns) == 3:
+                    for loc in self.raw_data[s].keys():
+                        for imu in ['accel', 'gyro']:
+                            self.data[s][loc][imu] = dict()
+                            self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][
+                                                               turns[0][-1]:turns[1][0], :]
+                            self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][
+                                                               turns[1][-1]:turns[2][0], :]
+                events.append(e + '-1')
+                events.append(e + '-2')
+
                 if plot:
                     i1 = np.array([j[slice(0, 3, 2)] for j in turns]).flatten()
                     i2 = np.array([j[1] for j in turns])
@@ -238,6 +267,7 @@ class GaitParameters:
                     ax[i].plot(self.raw_data[s][l]['gyro'][e][:, 0], fd)
                     ax[i].plot(self.raw_data[s][l]['gyro'][e][i2, 0], fd[i2], 'ro')
                     ax[i].plot(self.raw_data[s][l]['gyro'][e][i1, 0], fd[i1], 'k+')
+                    ax[i].plot()
                     ax[i].set_title(f'{e}')
 
                 i += 1
