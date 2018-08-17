@@ -305,18 +305,17 @@ class GaitParameters:
 
         for s in ['1', '2']:  # self.subs
             if plot:
-                f, ax = pl.subplots(nrows=np.ceil(self.n_ev/2).astype(int), ncols=2, figsize=(15, 8), sharex=True)
+                f, ax = pl.subplots(ncols=self.n_ev, nrows=2, figsize=(16, 8), sharey=True)
                 f.suptitle(f'Subject: {s}')
-            m = 0  # figure foot side sensor tracking
+            n = 0  # figure foot side sensor tracking
 
             # axis of rotation.  Is always 3 for lateral shank sensors
             irot = 3
 
             for l in sensors:
-                n = 0  # figure event number tracking
+                m = 0  # figure event number tracking
                 ax[n, m].set_title(f'{l}')
                 for e in self.events:
-                    n = int(e[-3])-1  # get the index of the first walk and turn number
                     fs = 1/np.mean(np.diff(self.data[s][l]['gyro'][e][:, 0]))  # sampling frequency
                     wave = 'mexh'  # mexican hat wavelet
 
@@ -382,8 +381,8 @@ class GaitParameters:
                     if plot:
                         line1, = ax[n, m].plot(self.data[s][l]['gyro'][e][:, 0], self.data[s][l]['gyro'][e][:, irot],
                                                label='Raw Data', color='b')
-                        ax[n, m].plot(self.data[s][l]['gyro'][e][lmx, 0], self.data[s][l]['gyro'][e][lmx, irot], 'ro')
-                        ax[n, m].plot(self.data[s][l]['gyro'][e][tr, 0], self.data[s][l]['gyro'][e][tr, irot], 'ko')
+                        ax[n, m].plot(self.data[s][l]['gyro'][e][lmx, 0], self.data[s][l]['gyro'][e][lmx, irot], 'rx')
+                        ax[n, m].plot(self.data[s][l]['gyro'][e][tr, 0], self.data[s][l]['gyro'][e][tr, irot], 'kx')
 
                         for st in self.stance[s][e]:
                             ax[n, m].plot(self.data[s][l]['gyro'][e][st[0]:st[1], 0],
@@ -393,19 +392,19 @@ class GaitParameters:
                             ax[n, m].plot(self.data[s][l]['gyro'][e][sw[0]:sw[1], 0],
                                           self.data[s][l]['gyro'][e][sw[0]:sw[1], irot], linewidth=7, alpha=0.4,
                                           color='g')
-
-                        red = Patch(color='r', alpha=0.4, label='Stance')
-                        green = Patch(color='g', alpha=0.4, label='Swing')
-                        ax[n, m].legend(handles=[line1, red, green])
-
-                m += 1
+                    m += 1
+                n += 1
 
             if plot:
-                f.tight_layout(rect=[0, 0.03, 1, 0.95])  # tight layout except for the figure title
-                f.subplots_adjust(hspace=0)  # no vertical space betwen subplots
+                red = Patch(color='r', alpha=0.4, label='Stance')
+                green = Patch(color='g', alpha=0.4, label='Swing')
+                ax[0, -1].legend(handles=[line1, red, green])
 
-                ax[-1, 0].set_xlabel('Time [s]')
-                ax[-1, 1].set_xlabel('Time [s]')
+                ax[0, 0].set_ylabel(r'$\omega$ [$\frac{deg}{s}$]', fontsize=15)
+                ax[1, 0].set_ylabel(r'$\omega$ [$\frac{deg}{s}$]', fontsize=15)
+
+                f.tight_layout(rect=[0, 0.03, 1, 0.95])  # tight layout except for the figure title
+                f.subplots_adjust(wspace=0)  # no width between subplots
 
     @staticmethod
     def _calculate_stillness_factor(a, w, g, z_thresh):
