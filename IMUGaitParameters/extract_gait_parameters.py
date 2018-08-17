@@ -1,8 +1,10 @@
 from matplotlib import pyplot as pl
+from matplotlib.patches import Patch
 from scipy import signal
 import numpy as np
 from numpy import sin, cos, arcsin, arccos, arctan, arctan2
 from scipy import stats
+import pywt  # pywavelets
 import sys
 sys.path.append("C:\\Users\\Lukas Adamowicz\\Dropbox\\Masters\\MC10py")
 import MC10py
@@ -88,9 +90,11 @@ class GaitParameters:
         else:
             self.alt_events = None
 
-        # PRE-ALLOCATE storage for future use
+        # ALLOCATE storage for future use
         self.g = {i: {j: None for j in self.raw_data[i].keys()} for i in self.subs}  # standing gravity vector
-        self.data = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # pre-allocate storage for data
+        self.data = {i: {j: {k: dict() for k in ['accel', 'gyro']} for j in self.raw_data[i].keys()} for i in self.subs}
+        self.stance = {i: dict() for i in self.subs}  # allocate storage for stance indices
+        self.swing = {i: dict() for i in self.subs}  # allocate storage for swing indices
         self.gait_params = {i: dict() for i in self.subs}  # pre-allocate storage for gait parameters
 
     def _mean_stillness(self, bias, grav, i, ax, s, sensor, e, nst, plot):
@@ -193,16 +197,18 @@ class GaitParameters:
 
     def _turn_detect(self, plot=False):
         """
-        Detect 180 degree turns in walking data
+        Detect 180 degree turns in walking data.  Designed for a walk and turn trial, with one turn in the middle of
+        the data
         """
         pl.close('all')  # close all open plots before running
 
-        events = []
         l = 'sacrum'  # body location to look through
         for s in self.subs:  # iterate through each subject
             if plot:
                 f, ax = pl.subplots(self.n_ev, figsize=(14, 9))
+                f.suptitle(f'Subject: {s}')
 
+            events = []
             i = 0
             fs = 1/np.mean(np.diff(self.raw_data[s][l]['accel'][self.events[0]][:, 0]))  # sampling frequency
             fnyq = fs/2  # nyquist frequency
@@ -219,58 +225,187 @@ class GaitParameters:
                 _ips = signal.argrelmax(fd, order=63, mode='wrap')
                 # exclude any peaks less than 2x the mean of the filtered data
                 ip = _ips[0][np.argwhere(fd[_ips] > 2*mfd)].flatten()
-                turns = []
+                peaks = []  # peaks of turning
+                tpts = []  # turn points
+
+                # for each of the detected peaks
                 for k in range(len(ip)):
+                    # search for points before and after the peak with values less than 125% of the mean
                     i_bef = np.argwhere(fd[:ip[k]] < 1.25*mfd).flatten()
-                    i_aft = np.argwhere(fd[ip[k]:] < 1.25*mfd).flatten()
+                    i_aft = np.argwhere(fd[ip[k]:] < 1.25*mfd).flatten() + ip[k]
 
+                    # if there are points before and after
                     if i_bef.size > 0 and i_aft.size > 0:
-                        turns.append((i_bef[-1], ip[k], i_aft[0] + ip[k]))
-                    elif i_bef.size == 0:
-                        turns.append((0, ip[k], i_aft[0] + ip[k]))
-                    elif i_aft.size == 0:
-                        turns.append((i_bef[-1], ip[k], len(fd)-1))
+                        peaks.append(ip[k])  # append the peak to the list of peaks
+                        tpts.append(i_bef[-1])  # append the points closest to the peak to the list of turn points
+                        tpts.append(i_aft[0])
+                    # if there are no points before the peak lower than 125% of the mean
+                    elif i_bef.size == 0 or i_bef.size < int(fs):
+                        peaks.append(ip[k])  # append the peak
+                        tpts.append(i_aft[0])  # use the first point after the peak to go below 125% of mean
+                    # if there are no points after the peak lower than 125% of the mean
+                    elif i_aft.size == 0 or i_aft.size < int(fs):
+                        peaks.append(ip[k])  # append the peak
+                        tpts.append(i_bef[-1])  # use the last point before the peak to go below 125% of mean
 
-                if len(turns) == 1:
-                    for loc in self.raw_data[s].keys():
-                        for imu in ['accel', 'gyro']:
-                            self.data[s][loc][imu] = dict()
-                            self.data[s][loc][imu][e+'-1'] = self.raw_data[s][loc][imu][e][:turns[0][0], :]
-                            self.data[s][loc][imu][e+'-2'] = self.raw_data[s][loc][imu][e][turns[0][-1]:, :]
-                elif len(turns) == 2:
-                    for loc in self.raw_data[s].keys():
-                        for imu in ['accel', 'gyro']:
-                            self.data[s][loc][imu] = dict()
-                            if turns[0][1] < turns[1][1]:
-                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:turns[0][0], :]
-                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][
-                                                                   turns[0][-1]:turns[1][0], :]
+                peaks = np.asarray(peaks)
+                tpts = np.asarray(tpts)
+
+                for loc in self.raw_data[s].keys():
+                    for imu in ['gyro', 'accel']:
+                        if len(tpts) == 2:
+                            self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:tpts[0], :]
+                            self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[1]:, :]
+                        elif len(tpts) == 3:
+                            if tpts[0] < peaks[0]:
+                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:tpts[0], :]
+                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[1]:tpts[2], :]
                             else:
-                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][
-                                                                   turns[0][-1]:turns[1][0], :]
-                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][turns[1][-1]:, :]
-                elif len(turns) == 3:
-                    for loc in self.raw_data[s].keys():
-                        for imu in ['accel', 'gyro']:
-                            self.data[s][loc][imu] = dict()
-                            self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][
-                                                               turns[0][-1]:turns[1][0], :]
-                            self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][
-                                                               turns[1][-1]:turns[2][0], :]
+                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][tpts[0]:tpts[1], :]
+                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[2]:, :]
+                        elif len(tpts) == 4:
+                            if tpts[0] > peaks[0] and tpts[0] < peaks[1]:
+                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][tpts[0]:tpts[1], :]
+                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[2]:tpts[3], :]
+                            elif tpts[-1] > peaks[-1]:
+                                if tpts[0] < peaks[0]:
+                                    self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:tpts[0], :]
+                                    self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[1]:tpts[2], :]
+                                else:
+                                    self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][tpts[0]:tpts[1], :]
+                                    self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[2]:, :]
+
                 events.append(e + '-1')
                 events.append(e + '-2')
 
                 if plot:
-                    i1 = np.array([j[slice(0, 3, 2)] for j in turns]).flatten()
-                    i2 = np.array([j[1] for j in turns])
                     # ax[i].plot(self.raw_data[s][l]['gyro'][e][:, 0], self.raw_data[s][l]['gyro'][e][:, iz])
                     ax[i].plot(self.raw_data[s][l]['gyro'][e][:, 0], fd)
-                    ax[i].plot(self.raw_data[s][l]['gyro'][e][i2, 0], fd[i2], 'ro')
-                    ax[i].plot(self.raw_data[s][l]['gyro'][e][i1, 0], fd[i1], 'k+')
+                    ax[i].plot(self.raw_data[s][l]['gyro'][e][peaks, 0], fd[peaks], 'ro')
+                    ax[i].plot(self.raw_data[s][l]['gyro'][e][tpts, 0], fd[tpts], 'k+')
+                    for p in ['-1', '-2']:
+                        ax[i].plot(self.data[s][l]['gyro'][e+p][:, 0], self.data[s][l]['gyro'][e+p][:, iz], color='red',
+                                   alpha=0.4, linewidth=2)
                     ax[i].plot()
                     ax[i].set_title(f'{e}')
 
                 i += 1
+
+        self.events = events  # change events to include the split events
+        self.n_ev = len(self.events)  # update number of events
+
+    def step_detect(self, plot=False):
+        """
+        Method for detecting steps from foot sensors in walking data
+        """
+        pl.close('all')
+
+        sensors = ['proximal_lateral_shank_right', 'proximal_lateral_shank_left']
+        # sensors = ['dorsal_foot_right', 'dorsal_foot_left']
+
+        for s in ['1', '2']:  # self.subs
+            if plot:
+                f, ax = pl.subplots(nrows=np.ceil(self.n_ev/2).astype(int), ncols=2, figsize=(15, 8), sharex=True)
+                f.suptitle(f'Subject: {s}')
+            m = 0  # figure foot side sensor tracking
+
+            # axis of rotation.  Is always 3 for lateral shank sensors
+            irot = 3
+
+            for l in sensors:
+                n = 0  # figure event number tracking
+                ax[n, m].set_title(f'{l}')
+                for e in self.events:
+                    n = int(e[-3])-1  # get the index of the first walk and turn number
+                    fs = 1/np.mean(np.diff(self.data[s][l]['gyro'][e][:, 0]))  # sampling frequency
+                    wave = 'mexh'  # mexican hat wavelet
+
+                    # get sensor orientation by looking at if the maximum value is positive or negative
+                    max_ind = np.argmax(abs(self.data[s][l]['gyro'][e][:, irot]))
+                    orient = self.data[s][l]['gyro'][e][max_ind, irot] > 0
+
+                    # continuous wavelet transform
+                    coefs, freq = pywt.cwt(self.data[s][l]['gyro'][e][:, irot], np.arange(1, 17), wave,
+                                           sampling_period=1/fs)
+
+                    mc = np.mean(abs(coefs[5, :]))  # get the mean of the 5th wavelet scale
+                    if orient:
+                        pks, _ = signal.find_peaks(coefs[5, :], height=mc, distance=25)
+                    else:
+                        pks, _ = signal.find_peaks(-coefs[5, :], height=mc, distance=25)
+
+                    cf = 1 / (np.mean(np.diff(self.data[s][l]['gyro'][e][pks, 0])))  # rough estimate of cadence
+                    # get the index of the CWT coefficients with the scale closest to 2x the cadence
+                    ic = np.argmin(abs(freq - (2 * cf)))
+
+                    mc = np.mean(abs(coefs[ic, :]))  # get the mean of the coefficients of the selected frequency
+
+                    # search for peaks and troughs in the 2xCadence scale
+                    if orient:  # if signal is correctly oriented
+                        lmx, _ = signal.find_peaks(coefs[ic, :], height=mc, distance=25)
+                        lmn, _ = signal.find_peaks(-coefs[ic, :], distance=25)
+                    else:
+                        lmx, _ = signal.find_peaks(-coefs[ic, :], height=mc, distance=25)
+                        lmn, _ = signal.find_peaks(coefs[ic, :], distance=25)
+
+                    # assume that peaks were picked up correctly, however there are probably more minimums
+                    _tr = []
+                    for pk in lmx:
+                        i_bef = np.argwhere(lmn < pk)  # get indices of mins before the peak
+                        i_aft = np.argwhere(lmn > pk)  # get indices of mins after the peak
+                        if i_bef.size > 0 and i_aft.size > 0:  # if mins before and after the peak
+                            _tr.extend((lmn[i_bef[-1]], lmn[i_aft[0]]))  # append the closest mins
+                        elif i_bef.size == 0:
+                            _tr.append(lmn[i_aft[0]])
+                        elif i_aft.size == 0:
+                            _tr.append(lmn[i_bef[-1]])
+
+                    tr = np.unique(_tr)  # ensure there are no duplicates in the array
+
+                    # combine all the extrema into one list
+                    _ext = np.append(tr, lmx)  # first step extrema storage
+                    _extt = np.append(['min'] * len(tr), ['max'] * len(lmx))  # extrema type storage
+
+                    srt = np.argsort(_ext)  # get the indices of the sorted array
+                    ext = _ext[srt]  # sort the extrema array
+                    extt = _extt[srt]  # sort the extrema type array
+
+                    # sort into and save the stance and swing phase indices
+                    self.stance[s][e] = []
+                    self.swing[s][e] = []
+                    for i in range(len(ext)-2):
+                        if extt[i] == 'min' and extt[i+1] == 'max':  # swing is min to min separated by a maximum
+                            self.swing[s][e].append((ext[i], ext[i + 2]))  # append the two minimums surrounding the max
+                        elif extt[i] == 'min' and extt[i + 1] == 'min':  # stance is min to min with nothing between
+                            self.stance[s][e].append((ext[i], ext[i+1]))  # append the two minimums
+
+                    if plot:
+                        line1, = ax[n, m].plot(self.data[s][l]['gyro'][e][:, 0], self.data[s][l]['gyro'][e][:, irot],
+                                               label='Raw Data', color='b')
+                        ax[n, m].plot(self.data[s][l]['gyro'][e][lmx, 0], self.data[s][l]['gyro'][e][lmx, irot], 'ro')
+                        ax[n, m].plot(self.data[s][l]['gyro'][e][tr, 0], self.data[s][l]['gyro'][e][tr, irot], 'ko')
+
+                        for st in self.stance[s][e]:
+                            ax[n, m].plot(self.data[s][l]['gyro'][e][st[0]:st[1], 0],
+                                          self.data[s][l]['gyro'][e][st[0]:st[1], irot], linewidth=7, alpha=0.4,
+                                          color='r')
+                        for sw in self.swing[s][e]:
+                            ax[n, m].plot(self.data[s][l]['gyro'][e][sw[0]:sw[1], 0],
+                                          self.data[s][l]['gyro'][e][sw[0]:sw[1], irot], linewidth=7, alpha=0.4,
+                                          color='g')
+
+                        red = Patch(color='r', alpha=0.4, label='Stance')
+                        green = Patch(color='g', alpha=0.4, label='Swing')
+                        ax[n, m].legend(handles=[line1, red, green])
+
+                m += 1
+
+            if plot:
+                f.tight_layout(rect=[0, 0.03, 1, 0.95])  # tight layout except for the figure title
+                f.subplots_adjust(hspace=0)  # no vertical space betwen subplots
+
+                ax[-1, 0].set_xlabel('Time [s]')
+                ax[-1, 1].set_xlabel('Time [s]')
 
     @staticmethod
     def _calculate_stillness_factor(a, w, g, z_thresh):
@@ -493,8 +628,6 @@ class GaitParameters:
 
         return acc_n, vel_n, pos_n, state, statef
 
-
-
     def process_data(self):
         """
         Process the raw data and run it through a Kalman Filter to obtain heading and other signals
@@ -525,5 +658,6 @@ class GaitParameters:
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
 test._calibration_detect(still_time=6)
-test._turn_detect(plot=True)
+test._turn_detect(plot=False)
+test.step_detect(plot=True)
 # test.process_data()
