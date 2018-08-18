@@ -30,7 +30,7 @@ class GaitParameters:
         min_stance_time : float, optional
             Minimum stance time in seconds for detection.  Defaults to 0.03 seconds.
         swing_thresh : float, int, optional
-            Threshold for swing detection
+            Threshold for swing detection in rad/s.  Defaults to 2 rad/s
         event_match : str, optional
             Str to search for in the event type to use only certain events.  Default is '' (no event exclusion)
         alt_still : str, optional
@@ -90,11 +90,28 @@ class GaitParameters:
         else:
             self.alt_events = None
 
+        # convert raw data if it is not in the correct units.  Should be in m/s^2 and rad/s
+        # convert the raw acceleration data as part of the _calibration_detect to use the value of gravity
+        maxs = []  # get a list of the maximum angular velocities for all events
+        for s in self.subs:
+            for l in self.raw_data[s].keys():
+                for e in self.raw_data[s][l]['gyro'].keys():
+                    maxs.append(np.max(self.raw_data[s][l]['gyro'][e][:, 1:]))
+
+        if max(maxs) > 50:  # if the maximum over all events is greater than 50, convert to rad/s
+            for s in self.subs:
+                for l in self.raw_data[s].keys():
+                    for e in self.raw_data[s][l]['gyro'].keys():
+                        self.raw_data[s][l]['gyro'][e][:, 1:] *= np.pi/180
+
         # ALLOCATE storage for future use
         self.g = {i: {j: None for j in self.raw_data[i].keys()} for i in self.subs}  # standing gravity vector
         self.data = {i: {j: {k: dict() for k in ['accel', 'gyro']} for j in self.raw_data[i].keys()} for i in self.subs}
         self.stance = {i: dict() for i in self.subs}  # allocate storage for stance indices
         self.swing = {i: dict() for i in self.subs}  # allocate storage for swing indices
+        self.a_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for nagivational acc
+        self.v_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational vel
+        self.p_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational pos
         self.gait_params = {i: dict() for i in self.subs}  # pre-allocate storage for gait parameters
 
     def _mean_stillness(self, bias, grav, i, ax, s, sensor, e, nst, plot):
@@ -118,7 +135,7 @@ class GaitParameters:
         if plot:
             ax[i].plot(self.raw_data[s][sensor]['gyro'][e][:, 0], mag, label=r'$||\vec{\omega}||$')
             ax[i].plot(self.raw_data[s][sensor]['gyro'][e][mind - nst:mind, 0], mag[mind - nst:mind], color='r',
-                       alpha=0.5, linewidth=5, label=rf'Min. mean, $\sigma^2$={var:.3f}')
+                       alpha=0.5, linewidth=5, label=rf'Min. mean, $\sigma^2$={var:.2e}')
             axt = ax[i].twinx()
             axt.semilogy(self.raw_data[s][sensor]['gyro'][e][nst - 1:, 0], mm, color='orange')
             axt.set_ylabel('Mean')
@@ -176,7 +193,7 @@ class GaitParameters:
             else:
                 # allocate storage for bias and gravity in each sensor
                 bias = {l: np.zeros((self.n_ev, 3)) for l in self.raw_data[s].keys()}
-                grav = {l: np.zeros((len(self.alt_events), 3)) for l in self.raw_data[s].keys()}
+                grav = {l: np.zeros((self.n_ev, 3)) for l in self.raw_data[s].keys()}
 
                 if plot:
                     f, ax = pl.subplots(self.n_ev, figsize=(14, 8))
@@ -194,6 +211,14 @@ class GaitParameters:
                 self.g[s][l] = np.mean(grav[l], axis=0)
                 for e in self.raw_data[s][l]['gyro'].keys():
                     self.raw_data[s][l]['gyro'][e][:, 1:] -= np.mean(bias[l], axis=0)
+
+        # converting to m/s^2 from g if necessary
+        for s in self.subs:
+            for l in self.raw_data[s].keys():
+                for e in self.events:
+                    if np.linalg.norm(self.g[s][l]) < 4.9:
+                        self.g[s][l] *= 9.81
+                        self.raw_data[s][l]['accel'][e][:, 1:] *= 9.81
 
     def _turn_detect(self, plot=False):
         """
@@ -298,12 +323,12 @@ class GaitParameters:
         """
         Method for detecting steps from foot sensors in walking data
         """
-        pl.close('all')
+        # pl.close('all')
 
         sensors = ['proximal_lateral_shank_right', 'proximal_lateral_shank_left']
         # sensors = ['dorsal_foot_right', 'dorsal_foot_left']
 
-        for s in ['1', '2']:  # self.subs
+        for s in ['1', '2']:  # self.subs:
             if plot:
                 f, ax = pl.subplots(ncols=self.n_ev, nrows=2, figsize=(16, 8), sharey=True)
                 f.suptitle(f'Subject: {s}')
@@ -314,7 +339,8 @@ class GaitParameters:
 
             for l in sensors:
                 m = 0  # figure event number tracking
-                ax[n, m].set_title(f'{l}')
+                if plot:
+                    ax[n, m].set_title(f'{l}')
                 for e in self.events:
                     fs = 1/np.mean(np.diff(self.data[s][l]['gyro'][e][:, 0]))  # sampling frequency
                     wave = 'mexh'  # mexican hat wavelet
@@ -400,8 +426,8 @@ class GaitParameters:
                 green = Patch(color='g', alpha=0.4, label='Swing')
                 ax[0, -1].legend(handles=[line1, red, green])
 
-                ax[0, 0].set_ylabel(r'$\omega$ [$\frac{deg}{s}$]', fontsize=15)
-                ax[1, 0].set_ylabel(r'$\omega$ [$\frac{deg}{s}$]', fontsize=15)
+                ax[0, 0].set_ylabel(r'$\omega$ [$\frac{rad}{s}$]', fontsize=15)
+                ax[1, 0].set_ylabel(r'$\omega$ [$\frac{rad}{s}$]', fontsize=15)
 
                 f.tight_layout(rect=[0, 0.03, 1, 0.95])  # tight layout except for the figure title
                 f.subplots_adjust(wspace=0)  # no width between subplots
@@ -636,27 +662,41 @@ class GaitParameters:
         sensors = ['dorsal_foot_right', 'dorsal_foot_left']
 
         for s in ['1', '2']:  # self.subs:
+            f, ax = pl.subplots(2, figsize=(15, 8))
+            li = 0
             for l in sensors:
+                ei = 0
                 for e in self.events:
-                    if np.linalg.norm(self.g[s][l]) < 1.5:  # if the magnitude of gravity is less than 1.5
-                        # ie gravity units are in G's
-                        self.raw_data[s][l]['accel'][e][:, 1:] *= 9.81  # convert to m/s^2 from g
-                        self.g[s][l] *= 9.81  # convert to m/s^2 from g
-                    if self.raw_data[s][l]['gyro'][e][:, 1:].max() > 50:  # if data is clearly in deg/s
-                        self.raw_data[s][l]['gyro'][e][:, 1:] *= np.pi/180  # convert to rad/s
-
-                    zed, zind = GaitParameters._calculate_stillness_factor(self.raw_data[s][l]['accel'][e][:, 1:],
-                                                                           self.raw_data[s][l]['gyro'][e][:, 1:],
+                    zed, zind = GaitParameters._calculate_stillness_factor(self.data[s][l]['accel'][e][:, 1:],
+                                                                           self.data[s][l]['gyro'][e][:, 1:],
                                                                            self.g[s][l], self.zt)
 
-                    a_n, v_n, p_n, state, statef = GaitParameters._kalman_filter(self.raw_data[s][l]['accel'][e][:, 0],
-                                                                                 self.raw_data[s][l]['accel'][e][:, 1:],
-                                                                                 self.raw_data[s][l]['gyro'][e][:, 1:],
-                                                                                 self.g[s][l], zind, self.mst, self.swt)
+                    self.a_n[s][l][e], \
+                    self.v_n[s][l][e], \
+                    self.p_n[s][l][e], \
+                    state, statef = GaitParameters._kalman_filter(self.data[s][l]['accel'][e][:, 0],
+                                                                  self.data[s][l]['accel'][e][:, 1:],
+                                                                  self.data[s][l]['gyro'][e][:, 1:],
+                                                                  self.g[s][l], zind, self.mst, self.swt)
+
+                    if ei == 0:
+                        ax[li].plot(self.data[s][l]['gyro'][e][:, 0], self.data[s][l]['gyro'][e][:, 3])
+                        ax[li].plot(self.data[s][l]['gyro'][e][:, 0], statef)
+
+                        for st in self.stance[s][e]:
+                            ax[li].plot(self.data[s][l]['gyro'][e][st[0]:st[1], 0],
+                                        self.data[s][l]['gyro'][e][st[0]:st[1], 3], color='r', alpha=0.4, linewidth=8)
+                        for sw in self.swing[s][e]:
+                            ax[li].plot(self.data[s][l]['gyro'][e][sw[0]:sw[1], 0],
+                                        self.data[s][l]['gyro'][e][sw[0]:sw[1], 3], color='g', alpha=0.4, linewidth=8)
+
+                    ei += 1
+                li += 1
+
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
-test._calibration_detect(still_time=6)
+test._calibration_detect(still_time=6, plot=False)
 test._turn_detect(plot=False)
-test.step_detect(plot=True)
-# test.process_data()
+test.step_detect(plot=False)
+test.process_data()
