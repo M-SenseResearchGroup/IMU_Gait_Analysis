@@ -328,7 +328,7 @@ class GaitParameters:
         sensors = ['proximal_lateral_shank_right', 'proximal_lateral_shank_left']
         # sensors = ['dorsal_foot_right', 'dorsal_foot_left']
 
-        for s in ['1', '2']:  # self.subs:
+        for s in self.subs:
             if plot:
                 f, ax = pl.subplots(ncols=self.n_ev, nrows=2, figsize=(16, 8), sharey=True)
                 f.suptitle(f'Subject: {s}')
@@ -662,10 +662,7 @@ class GaitParameters:
         sensors = ['dorsal_foot_right', 'dorsal_foot_left']
 
         for s in ['1', '2']:  # self.subs:
-            f, ax = pl.subplots(2, figsize=(15, 8))
-            li = 0
             for l in sensors:
-                ei = 0
                 for e in self.events:
                     zed, zind = GaitParameters._calculate_stillness_factor(self.data[s][l]['accel'][e][:, 1:],
                                                                            self.data[s][l]['gyro'][e][:, 1:],
@@ -678,20 +675,6 @@ class GaitParameters:
                                                                   self.data[s][l]['accel'][e][:, 1:],
                                                                   self.data[s][l]['gyro'][e][:, 1:],
                                                                   self.g[s][l], zind, self.mst, self.swt)
-
-                    if ei == 0:
-                        ax[li].plot(self.data[s][l]['gyro'][e][:, 0], self.data[s][l]['gyro'][e][:, 3])
-                        ax[li].plot(self.data[s][l]['gyro'][e][:, 0], statef)
-
-                        for st in self.stance[s][e]:
-                            ax[li].plot(self.data[s][l]['gyro'][e][st[0]:st[1], 0],
-                                        self.data[s][l]['gyro'][e][st[0]:st[1], 3], color='r', alpha=0.4, linewidth=8)
-                        for sw in self.swing[s][e]:
-                            ax[li].plot(self.data[s][l]['gyro'][e][sw[0]:sw[1], 0],
-                                        self.data[s][l]['gyro'][e][sw[0]:sw[1], 3], color='g', alpha=0.4, linewidth=8)
-
-                    ei += 1
-                li += 1
 
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
