@@ -52,8 +52,8 @@ class GaitParameters:
         self.swt = swing_thresh
         self.astill = alt_still
 
-        self.parameters = ['Step_Length', 'Lateral_Deviation', 'Step_Height', 'Max_Swing_Velocity', 'Foot_Attack_Angle',
-                           'Contact_Time', 'Step_Time', 'Cadence']  # list of gait parameters to extract
+        self.parameters = ['Step Length', 'Lateral Deviation', 'Step Height', 'Max Swing Velocity', 'Foot Attack Angle',
+                           'Contact Time', 'Step Time', 'Cadence']  # list of gait parameters to extract
 
         _subs = list(self.raw_data.keys())  # initial list of subjects
 
@@ -117,7 +117,7 @@ class GaitParameters:
         self.a_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for nagivational acc
         self.v_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational vel
         self.p_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational pos
-        self.gait_params = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # gait parameters
+        self.gait_params = {i: dict() for i in self.subs}  # gait parameters
 
     def _mean_stillness(self, bias, grav, i, ax, s, sensor, e, nst, plot):
         mag = np.linalg.norm(self.raw_data[s][sensor]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
@@ -708,7 +708,9 @@ class GaitParameters:
 
         for s in ['1', '2']:  # self.subs:
             for l in sensors:
+                self.gait_params[s][l] = dict()
                 for e in self.events:
+                    self.gait_params[s][l][e] = {i: [] for i in self.parameters}
                     zed, zind = GaitParameters._calculate_stillness_factor(self.data[s][l]['accel'][e][:, 1:],
                                                                            self.data[s][l]['gyro'][e][:, 1:],
                                                                            self.g[s][l], self.zt)
@@ -721,7 +723,9 @@ class GaitParameters:
                                                                   self.data[s][l]['gyro'][e][:, 1:],
                                                                   self.g[s][l], zind, self.mst, self.swt)
 
-                    for st in self.steps[s][e]:
+                    for st in self.step[s][e]:
+                        t = self.data[s][l]['accel'][e][st[0]:st[2], 0]
+
                         # rotate so step is in x direction
                         pca = PCA()
                         pca.fit(self.p_n[s][l][e][:2, st[0]:st[2]])
@@ -750,6 +754,16 @@ class GaitParameters:
                             # A'^T = A^T R => A' = R^T A
                             pos_r = R.transpose() * pos_r
                             vel_r = R.transpose() * vel_r
+
+                        self.gait_params[s][l][e]['Step Length'].append(GaitParameters.Step_Length(pos_r))
+                        self.gait_params[s][l][e]['Lateral Deviation'].append(GaitParameters.Lateral_Deviation(pos_r))
+                        self.gait_params[s][l][e]['Step Height'].append(GaitParameters.Step_Height(pos_r))
+                        self.gait_params[s][l][e]['Max Swing Velocity'].append(GaitParameters.Max_Swing_Velocity(vel_r))
+                        self.gait_params[s][l][e]['Foot Attack Angle'].append(GaitParameters.Foot_Attack_Angle(vel_r,
+                                                                                                               -1))
+                        self.gait_params[s][l][e]['Contact Time'].append(GaitParameters.Contact_Time(t, 0, st[1]-st[0]))
+                        self.gait_params[s][l][e]['Step Time'].append(GaitParameters.Step_Time(t, 0, -1))
+                        self.gait_params[s][l][e]['Cadence'].append(GaitParameters.Cadence(t, 0, -1))
 
 
 
