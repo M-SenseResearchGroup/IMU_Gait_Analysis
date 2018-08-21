@@ -5,6 +5,7 @@ import numpy as np
 from numpy import sin, cos, arcsin, arccos, arctan, arctan2
 from scipy import stats
 import pywt  # pywavelets
+from sklearn.decomposition import PCA
 import sys
 sys.path.append("C:\\Users\\Lukas Adamowicz\\Dropbox\\Masters\\MC10py")
 import MC10py
@@ -50,6 +51,9 @@ class GaitParameters:
         self.mst = min_stance_time
         self.swt = swing_thresh
         self.astill = alt_still
+
+        self.parameters = ['Step_Length', 'Lateral_Deviation', 'Step_Height', 'Max_Swing_Velocity', 'Foot_Attack_Angle',
+                           'Contact_Time', 'Step_Time', 'Cadence']  # list of gait parameters to extract
 
         _subs = list(self.raw_data.keys())  # initial list of subjects
 
@@ -109,10 +113,11 @@ class GaitParameters:
         self.data = {i: {j: {k: dict() for k in ['accel', 'gyro']} for j in self.raw_data[i].keys()} for i in self.subs}
         self.stance = {i: dict() for i in self.subs}  # allocate storage for stance indices
         self.swing = {i: dict() for i in self.subs}  # allocate storage for swing indices
+        self.step = {i: dict() for i in self.subs}  # allocate storage for step indices
         self.a_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for nagivational acc
         self.v_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational vel
         self.p_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational pos
-        self.gait_params = {i: dict() for i in self.subs}  # pre-allocate storage for gait parameters
+        self.gait_params = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # gait parameters
 
     def _mean_stillness(self, bias, grav, i, ax, s, sensor, e, nst, plot):
         mag = np.linalg.norm(self.raw_data[s][sensor]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
@@ -395,15 +400,20 @@ class GaitParameters:
                     ext = _ext[srt]  # sort the extrema array
                     extt = _extt[srt]  # sort the extrema type array
 
-                    # sort into and save the stance and swing phase indices
+                    # sort into and save the stance, swing, and step indices
                     self.stance[s][e] = []
                     self.swing[s][e] = []
+                    self.step[s][e] = []
                     for i in range(len(ext)-2):
                         if extt[i] == 'min' and extt[i+1] == 'max':  # swing is min to min separated by a maximum
                             self.swing[s][e].append((ext[i], ext[i + 2]))  # append the two minimums surrounding the max
                         elif extt[i] == 'min' and extt[i + 1] == 'min':  # stance is min to min with nothing between
                             self.stance[s][e].append((ext[i], ext[i+1]))  # append the two minimums
-
+                    # redo for full steps
+                    for i in range(len(ext)-3):
+                        # full step sequence is min (foot-strike) -> min (toe-off) -> max -> min (foot-strike)
+                        if extt[i] == 'min' and extt[i+1] == 'min' and extt[i+2] == 'max':
+                            self.step[s][e].append((ext[i], ext[i+1], ext[i+3]))
                     if plot:
                         line1, = ax[n, m].plot(self.data[s][l]['gyro'][e][:, 0], self.data[s][l]['gyro'][e][:, irot],
                                                label='Raw Data', color='b')
@@ -653,6 +663,41 @@ class GaitParameters:
 
         return acc_n, vel_n, pos_n, state, statef
 
+    # -------------------------------------------------------
+    # ------- METHODS FOR CALCULATING GAIT PARAMETERS -------
+    # -------------------------------------------------------
+    @staticmethod
+    def Step_Length(pos):
+        return pos[0, -1]
+
+    @staticmethod
+    def Lateral_Deviation(pos):
+        return np.ptp(pos[1, :])
+
+    @staticmethod
+    def Step_Height(pos):
+        return np.max(pos[2, :])
+
+    @staticmethod
+    def Max_Swing_Velocity(vel):
+        return np.max(np.sqrt(np.sum(vel**2, axis=0)))
+
+    @staticmethod
+    def Foot_Attack_Angle(vel, ind):
+        return arctan2(vel[2, ind], vel[0, ind]) * 180/np.pi
+
+    @staticmethod
+    def Contact_Time(time, start, stop):
+        return time[stop] - time[start]
+
+    @staticmethod
+    def Step_Time(time, start, stop):
+        return time[stop] - time[start]
+
+    @staticmethod
+    def Cadence(time, start, stop):
+        return 1/(time[stop] - time[start])
+
     def process_data(self):
         """
         Process the raw data and run it through a Kalman Filter to obtain heading and other signals
@@ -675,6 +720,39 @@ class GaitParameters:
                                                                   self.data[s][l]['accel'][e][:, 1:],
                                                                   self.data[s][l]['gyro'][e][:, 1:],
                                                                   self.g[s][l], zind, self.mst, self.swt)
+
+                    for st in self.steps[s][e]:
+                        # rotate so step is in x direction
+                        pca = PCA()
+                        pca.fit(self.p_n[s][l][e][:2, st[0]:st[2]])
+                        coef = pca.components_
+
+                        # create arrays
+                        pos_r = np.zeros_like(self.p_n[s][l][e][:, st[0]:st[2]])
+                        vel_r = np.zeros_like(self.p_n[s][l][e][:, st[0]:st[2]])
+
+                        # assign rotated value to arrays
+                        pos_r[:2, :] = self.p_n[s][l][e][:2, st[0]:st[2]] * coef
+                        pos_r[2, :] = self.p_n[s][l][e][2, st[0]:st[2]]
+
+                        vel_r[:2, :] = self.v_n[s][l][e][:2, st[0]:st[2]] * coef
+                        vel_r[2, :] = self.v_n[s][l][e][2, st[0]:st[2]]
+
+                        # correct position so x, y starts at origin with minimum z
+                        pos_r -= np.append(pos_r[:2, 0], min(pos_r[2, :])).reshape((3, 1)) * \
+                                 np.ones((1, len(pos_r[0, :])))
+
+                        # ensure that it is in the positive x-direction
+                        if pos_r[-1, 0] < 0:
+                            # rotate by 180 deg
+                            R = np.array([[cos(np.pi), sin(np.pi), 0], [-sin(np.pi), cos(np.pi), 0], [0, 0, 1]])
+
+                            # A'^T = A^T R => A' = R^T A
+                            pos_r = R.transpose() * pos_r
+                            vel_r = R.transpose() * vel_r
+
+
+
 
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
