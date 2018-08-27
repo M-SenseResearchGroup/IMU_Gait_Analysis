@@ -765,9 +765,6 @@ class GaitParameters:
                         self.gait_params[s][l][e]['Cadence'].append(GaitParameters.Cadence(t, 0, -1))
 
 
-
-
-
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
 test._calibration_detect(still_time=6, plot=False)
