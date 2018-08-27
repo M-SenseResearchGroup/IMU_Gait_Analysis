@@ -506,8 +506,8 @@ class GaitParameters:
         statef = np.copy(state)  # pre-allocate for smoothed state
 
         # calculate Euler angles assuming stationary sensor
-        pitch = np.mean(-arcsin(a[0, 0] / np.linalg.norm(g)))
-        roll = np.mean(arctan(a[0, 1] / a[0, 2]))
+        pitch = -arcsin(a[0, 0] / np.linalg.norm(g))
+        roll = arctan(a[0, 1] / a[0, 2])
         yaw = 0
 
         # Rotation matrix?
@@ -566,9 +566,9 @@ class GaitParameters:
                            [w[i, 2], 0, -w[i, 0]],
                            [-w[i, 1], w[i, 0], 0]])
 
-            # TODO check lstsq result
             # orientation estimation
-            C = C_prev @ np.linalg.lstsq(2 * np.identity(3) + wm * dt, 2 * np.identity(3) - wm * dt, rcond=None)[0]
+            C = np.linalg.lstsq((2 * np.identity(3) - wm * dt).T,
+                                (C_prev @ (2 * np.identity(3) + wm * dt)).T, rcond=None)[0].T
 
             # transform the acceleration into the navigational frame
             acc_n[:, i] = 0.5 * (C + C_prev) @ a[i, :]
@@ -603,9 +603,8 @@ class GaitParameters:
                 # START Kalman Filter zero-velocity updates
                 state[i] = 0  # stance
 
-                # TODO check lstsq result
                 # Kalman Gain
-                K, _, _, _ = np.linalg.lstsq((P @ H.transpose()).T, H @ P @ H.transpose() + R, rcond=None)
+                K = np.linalg.lstsq((H @ P @ H.T + R).T, (P @ H.T).T, rcond=None)[0].T
 
                 # update the filter state
                 delta_x = K @ vel_n[:, i]
@@ -627,7 +626,7 @@ class GaitParameters:
 
                 # TODO check lstsq result
                 # correct orientation
-                C = np.linalg.lstsq(2 * np.identity(3) + ang_mat, 2 * np.identity(3) - ang_mat, rcond=None)[0] @ C
+                C = np.linalg.lstsq((2 * np.identity(3) - ang_mat).T, 2 * np.identity(3) + ang_mat, rcond=None)[0].T @ C
 
                 # correct position and velocity estimates
                 vel_n[:, i] -= vel_e
@@ -728,7 +727,7 @@ class GaitParameters:
 
                         # rotate so step is in x direction
                         pca = PCA()
-                        pca.fit(self.p_n[s][l][e][:2, st[0]:st[2]])
+                        pca.fit(self.p_n[s][l][e][:2, st[0]:st[2]].T)
                         coef = pca.components_
 
                         # create arrays
@@ -736,10 +735,10 @@ class GaitParameters:
                         vel_r = np.zeros_like(self.p_n[s][l][e][:, st[0]:st[2]])
 
                         # assign rotated value to arrays
-                        pos_r[:2, :] = self.p_n[s][l][e][:2, st[0]:st[2]] * coef
+                        pos_r[:2, :] = (self.p_n[s][l][e][:2, st[0]:st[2]].T @ coef.T).T
                         pos_r[2, :] = self.p_n[s][l][e][2, st[0]:st[2]]
 
-                        vel_r[:2, :] = self.v_n[s][l][e][:2, st[0]:st[2]] * coef
+                        vel_r[:2, :] = (self.v_n[s][l][e][:2, st[0]:st[2]].T @ coef.T).T
                         vel_r[2, :] = self.v_n[s][l][e][2, st[0]:st[2]]
 
                         # correct position so x, y starts at origin with minimum z
@@ -747,13 +746,13 @@ class GaitParameters:
                                  np.ones((1, len(pos_r[0, :])))
 
                         # ensure that it is in the positive x-direction
-                        if pos_r[-1, 0] < 0:
+                        if pos_r[0, -1] < 0:
                             # rotate by 180 deg
                             R = np.array([[cos(np.pi), sin(np.pi), 0], [-sin(np.pi), cos(np.pi), 0], [0, 0, 1]])
 
                             # A'^T = A^T R => A' = R^T A
-                            pos_r = R.transpose() * pos_r
-                            vel_r = R.transpose() * vel_r
+                            pos_r = R.transpose() @ pos_r
+                            vel_r = R.transpose() @ vel_r
 
                         self.gait_params[s][l][e]['Step Length'].append(GaitParameters.Step_Length(pos_r))
                         self.gait_params[s][l][e]['Lateral Deviation'].append(GaitParameters.Lateral_Deviation(pos_r))
