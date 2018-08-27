@@ -54,6 +54,7 @@ class GaitParameters:
 
         self.parameters = ['Step Length', 'Lateral Deviation', 'Step Height', 'Max Swing Velocity', 'Foot Attack Angle',
                            'Contact Time', 'Step Time', 'Cadence']  # list of gait parameters to extract
+        self.ev_ord = ['Heavy Back', 'Light Back', 'Heavy Shoulder', 'Light Shoulder']  # order of bags
 
         _subs = list(self.raw_data.keys())  # initial list of subjects
 
@@ -556,6 +557,7 @@ class GaitParameters:
         start_swing = 0
         start_stance = 0
 
+        # TODO Fix this, doesn't work
         # Main loop for Kalman Filter
         for i in range(1, n):
             # START INS (transformation, double integration)
@@ -626,7 +628,8 @@ class GaitParameters:
 
                 # TODO check lstsq result
                 # correct orientation
-                C = np.linalg.lstsq((2 * np.identity(3) - ang_mat).T, 2 * np.identity(3) + ang_mat, rcond=None)[0].T @ C
+                C = np.linalg.lstsq((2 * np.identity(3) - ang_mat).T,
+                                    (2 * np.identity(3) + ang_mat).T, rcond=None)[0].T @ C
 
                 # correct position and velocity estimates
                 vel_n[:, i] -= vel_e
@@ -705,7 +708,8 @@ class GaitParameters:
         # sensors used
         sensors = ['dorsal_foot_right', 'dorsal_foot_left']
 
-        for s in ['1', '2']:  # self.subs:
+        # TODO change back to all subjects
+        for s in ['1']:  # self.subs:
             for l in sensors:
                 self.gait_params[s][l] = dict()
                 for e in self.events:
@@ -721,6 +725,12 @@ class GaitParameters:
                                                                   self.data[s][l]['accel'][e][:, 1:],
                                                                   self.data[s][l]['gyro'][e][:, 1:],
                                                                   self.g[s][l], zind, self.mst, self.swt)
+
+                    f, ax = pl.subplots()
+                    ax.plot(self.data[s][l]['accel'][e][:, 0], self.p_n[s][l][e].T, '.-')
+                    ax.legend(['x', 'y', 'z'])
+                    ax.set_title(f'{s}: {l.split("""_""")[-1]} {e}')
+                    f.tight_layout()
 
                     for st in self.step[s][e]:
                         t = self.data[s][l]['accel'][e][st[0]:st[2], 0]
@@ -764,6 +774,32 @@ class GaitParameters:
                         self.gait_params[s][l][e]['Step Time'].append(GaitParameters.Step_Time(t, 0, -1))
                         self.gait_params[s][l][e]['Cadence'].append(GaitParameters.Cadence(t, 0, -1))
 
+    def export_gait_parameters(self, file):
+        """
+        Method for exporting results to a csv file.  Specifically for Walk and Turn data, but may potentially used for
+        other data if format matches
+        """
+        hdr = ','.join(['Subject', 'Foot', 'Bag Type'] + self.parameters)  # create header for the file
+
+        fid = open(file, 'w')  # open file to write to
+
+        fid.write(hdr + '\n')  # write the header plus a new line indicator
+
+        # TODO change back to all subjects
+        for s in ['1', '2']:  # self.subs:
+            for l in self.gait_params[s].keys():
+                for e in self.events:
+                    f = l.split('_')[-1]  # get foot side, left or right
+                    bt = self.ev_ord[int(e.split('-')[0][-1])-1]  # get bag type
+
+                    for i in range(len(self.gait_params[s][l][e][self.parameters[0]])):
+                        line = f'{s},{f},{bt}'
+                        for p in self.parameters:
+                            line += f',{self.gait_params[s][l][e][p][i]}'
+                        fid.write(line + '\n')
+
+        fid.close()
+
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
@@ -771,3 +807,4 @@ test._calibration_detect(still_time=6, plot=False)
 test._turn_detect(plot=False)
 test.step_detect(plot=False)
 test.process_data()
+test.export_gait_parameters('..\\..\\Data\\wt_results.csv')
