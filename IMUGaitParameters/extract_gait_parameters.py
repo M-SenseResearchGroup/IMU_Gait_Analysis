@@ -97,13 +97,21 @@ class GaitParameters:
 
         # convert raw data if it is not in the correct units.  Should be in m/s^2 and rad/s
         # convert the raw acceleration data as part of the _calibration_detect to use the value of gravity
-        maxs = []  # get a list of the maximum angular velocities for all events
+        maxa = []  # get a list of the maximum accelerations for all events
+        maxw = []  # get a list of the maximum angular velocities for all events
         for s in self.subs:
             for l in self.raw_data[s].keys():
                 for e in self.raw_data[s][l]['gyro'].keys():
-                    maxs.append(np.max(self.raw_data[s][l]['gyro'][e][:, 1:]))
+                    maxa.append(np.max(self.raw_data[s][l]['accel'][e][:, 1:]))
+                    maxw.append(np.max(self.raw_data[s][l]['gyro'][e][:, 1:]))
 
-        if max(maxs) > 50:  # if the maximum over all events is greater than 50, convert to rad/s
+        if max(maxa) < 15:  # if the maximum over all events is less than 15, convert to m/s^2
+            for s in self.subs:
+                for l in self.raw_data[s].keys():
+                    for e in self.raw_data[s][l]['accel'].keys():
+                        self.raw_data[s][l]['accel'][e][:, 1:] *= 9.81
+
+        if max(maxw) > 50:  # if the maximum over all events is greater than 50, convert to rad/s
             for s in self.subs:
                 for l in self.raw_data[s].keys():
                     for e in self.raw_data[s][l]['gyro'].keys():
@@ -475,7 +483,7 @@ class GaitParameters:
         return zed, zind.flatten()
 
     @staticmethod
-    def _kalman_filter(t, a, w, g, zind, min_stance_time, swing_thresh):
+    def _kalman_filter(t, a, w, g, zind):
         """
         Kalman filter setup and operation for pedestrian tracking
 
@@ -491,194 +499,127 @@ class GaitParameters:
             1D array of gravity determined during still standing
         zind : array_like
             Boolean array indicating if the distance from stillness (zed) is less than the threshold
-        min_stance_time : float
-            Minimum time required for a stance to have/be occurring
-        swing_thresh : float
-            Minimum angular velocity value to be considered in the swing phase
         """
-
-        # TODO add inputs to effect sigma and other variables set down below
-        fs = 1 / np.mean(np.diff(t))
-
+        gm = np.linalg.norm(g)  # norm of gravity vector
         n, m = a.shape  # get data size
 
-        state = np.ones(n)  # pre-allocate for state storage
-        state[0] = 0
-        statef = np.copy(state)  # pre-allocate for smoothed state
-
-        # calculate Euler angles assuming stationary sensor
-        pitch = -arcsin(a[0, 0] / np.linalg.norm(g))
-        roll = arctan(a[0, 1] / a[0, 2])
+        if abs(a[0, 0]) > gm:
+            a0 = a[0, :] * gm/np.linalg.norm(a[0, 0])
+        else:
+            a0 = a[0, :]
+        pitch = -arcsin(a0[0] / gm)
+        roll = arctan(a0[1] / a0[2])
         yaw = 0
 
-        # Rotation matrix?
-        C = np.array([[cos(pitch), sin(roll) * sin(pitch), cos(roll) * cos(pitch)],
-                      [0, cos(roll), -sin(roll)],
-                      [-sin(pitch), sin(roll) * cos(pitch), cos(roll) * cos(pitch)]])
+        n = len(a[:, 0])
 
+        C = np.array([[cos(pitch) * cos(yaw), (sin(roll) * sin(pitch) * cos(yaw)) - (cos(roll) * sin(yaw)),
+                       (cos(roll) * sin(pitch) * cos(yaw)) + (sin(roll) * sin(yaw))],
+                      [cos(pitch) * sin(yaw), (sin(roll) * sin(pitch) * sin(yaw)) + (cos(roll) * cos(yaw)),
+                       (cos(roll) * sin(pitch) * sin(yaw)) - (sin(roll) * cos(yaw))],
+                      [-sin(pitch), sin(roll) * cos(pitch), cos(roll) * cos(pitch)]])
         C_prev = C.copy()
 
-        # pre-allocate storage for heading direction.  Indicates direction subject is facing, and not
-        # necessarily the direction of travel
-        heading = np.zeros(n)
+        heading = np.full(n, np.nan)
         heading[0] = yaw
 
-        # pre-allocate storage for acceleration in navigational frame
-        acc_n = np.zeros((3, n))
-        acc_n[:, 0] = C @ a[0, :]
+        acc_n = np.full((n, 3), np.nan)  # (3, n)
+        acc_n[0, :] = C @ a[0, :]
 
-        # pre-allocate storage for velocity in navigational frame, with initial velocity assumed to be 0
-        vel_n = np.zeros((3, n))
-        vel_n[:, 0] = np.array([0, 0, 0])
+        vel_n = np.full((n, 3), np.nan)  # (3, n)
+        vel_n[0, :] = 0
 
-        # pre-allocate storage for position in navigational frame.  Initial position arbitrarily set to 0
-        pos_n = np.zeros((3, n))
-        pos_n[:, 0] = np.array([0, 0, 0])
+        pos_n = np.full((n, 3), np.nan)  # (3, n)
+        pos_n[0, :] = 0
 
-        # pre-allocate storage for distance traveled used for altitude plots
-        distance = np.zeros(n)
+        distance = np.full(n, np.nan)
         distance[0] = 0
 
-        # Error covariance matrix
         P = np.zeros((9, 9))
 
-        # process noise parameter, gyroscope and accelerometer noise
         sigma_omega = 1e-2
         sigma_a = 1e-2
 
-        # ZUPT measurement matrix
         H = np.concatenate((np.zeros((3, 3)), np.zeros((3, 3)), np.identity(3)), axis=1)
 
-        # ZUPT measurement noise covariance matrix
-        sigma_v = 1e-3
-        R = np.diag([sigma_v] * 3) ** 2
+        sigma_v = 1e-2
+        R = np.diag([sigma_v, sigma_v, sigma_v]) ** 2
 
-        wmax = 0
-        start_swing = 0
-        start_stance = 0
-
-        # TODO Fix this, doesn't work
-        # Main loop for Kalman Filter
         for i in range(1, n):
-            # START INS (transformation, double integration)
-            dt = t[i] - t[i-1]  # seconds
+            dt = t[i] - t[i - 1]
 
-            # skew symmetric matrix for angular rates
-            wm = np.array([[0, -w[i, 2], w[i, 1]],
-                           [w[i, 2], 0, -w[i, 0]],
-                           [-w[i, 1], w[i, 0], 0]])
+            w_mat = np.asarray([[0, -w[i, 2], w[i, 1]],
+                                [w[i, 2], 0, -w[i, 0]],
+                                [-w[i, 1], w[i, 0], 0]])
 
-            # orientation estimation
-            C = np.linalg.lstsq((2 * np.identity(3) - wm * dt).T,
-                                (C_prev @ (2 * np.identity(3) + wm * dt)).T, rcond=None)[0].T
+            C = np.linalg.lstsq((2 * np.identity(3) - w_mat * dt).T, (C_prev @ (2 * np.identity(3) + w_mat * dt)).T,
+                                rcond=None)[0].T
 
-            # transform the acceleration into the navigational frame
-            acc_n[:, i] = 0.5 * (C + C_prev) @ a[i, :]
+            acc_n[i, :] = 0.5 * (C + C_prev) @ a[i, :]
 
-            # velocity and position using trapezoidal integration
-            gz = np.array([0, 0, np.linalg.norm(g)])
-            vel_n[:, i] = vel_n[:, i - 1] + ((acc_n[:, i] - gz) + (acc_n[:, i - 1] - gz)) * dt / 2
-            pos_n[:, i] = pos_n[:, i - 1] + (vel_n[:, i] + vel_n[:, i - 1]) * dt / 2
+            vel_n[i, :] = vel_n[i - 1, :] + ((acc_n[i, :] - np.array([0, 0, gm])) + (acc_n[i - 1, :] -
+                                                                                     np.array([0, 0, gm]))) * dt / 2
+            pos_n[i, :] = pos_n[i - 1, :] + (vel_n[i, :] + vel_n[i - 1, :]) * dt / 2
 
-            # skew symmetric matrix from navigational frame acceleration
-            S = np.array([[0, -acc_n[2, i], acc_n[1, i]],
-                          [acc_n[2, i], 0, -acc_n[0, i]],
-                          [-acc_n[1, i], acc_n[0, i], 0]])
+            S = np.asarray([[0, -acc_n[i, 2], acc_n[i, 1]],
+                            [acc_n[i, 2], 0, -acc_n[i, 0]],
+                            [-acc_n[i, 1], acc_n[i, 0], 0]])
 
-            # create state transition matrix
-            _r1 = np.concatenate((np.identity(3), np.zeros((3, 3)), np.zeros((3, 3))), axis=1)
-            _r2 = np.concatenate((np.zeros((3, 3)), np.identity(3), dt * np.identity(3)), axis=1)
-            _r3 = np.concatenate((-dt * S, np.zeros((3, 3)), np.identity(3)), axis=1)
+            n33 = (3, 3)
+            _r1 = np.concatenate((np.identity(3), np.zeros(n33), np.zeros(n33)), axis=1)
+            _r2 = np.concatenate((np.zeros(n33), np.identity(3), dt * np.identity(3)), axis=1)
+            _r3 = np.concatenate((-dt * S, np.zeros(n33), np.identity(3)), axis=1)
 
             F = np.concatenate((_r1, _r2, _r3), axis=0)
 
-            # compute the process noise covariance
-            Q = np.diag([sigma_omega, sigma_omega, sigma_omega, 0, 0, 0, sigma_a, sigma_a, sigma_a]) ** 2
+            Q = np.diag(
+                np.asarray([sigma_omega, sigma_omega, sigma_omega, 0, 0, 0, sigma_a, sigma_a, sigma_a]) * dt) ** 2
 
-            # propagate the error covariance matrix
-            P = F @ P @ np.linalg.inv(F) + Q
+            P = F @ P @ F.T + Q
 
-            # END of INS
-
-            # stance phase detection and zero-velocity updates
             if zind[i]:
-                # START Kalman Filter zero-velocity updates
-                state[i] = 0  # stance
-
-                # Kalman Gain
                 K = np.linalg.lstsq((H @ P @ H.T + R).T, (P @ H.T).T, rcond=None)[0].T
 
-                # update the filter state
-                delta_x = K @ vel_n[:, i]
+                delta_x = K @ vel_n[i, :]
 
-                # update the error covariance matrix
-                P = (np.identity(9) - K @ H) @ P  # simplified covariance update found in most books
+                P = (np.identity(9) - K @ H) @ P
 
-                # extract errors from the KF states
-                attitude_e = delta_x[:3]
-                pos_e = delta_x[3:6]
-                vel_e = delta_x[6:]
-                # END Kalman Filter zero-velocity update
+                a_e = delta_x[:3]
+                p_e = delta_x[3:6]
+                v_e = delta_x[6:]
 
-                # APPLY corrections to INS estimates
-                # skew symmetric matrix for small angles to correct orientation
-                ang_mat = -np.array([[0, -attitude_e[2], attitude_e[1]],
-                                     [attitude_e[2], 0, -attitude_e[0]],
-                                     [-attitude_e[1], attitude_e[0], 0]])
+                ang_mat = -np.asarray([[0, -a_e[2], a_e[1]],
+                                       [a_e[2], 0, -a_e[0]],
+                                       [-a_e[1], a_e[0], 0]])
 
-                # TODO check lstsq result
-                # correct orientation
-                C = np.linalg.lstsq((2 * np.identity(3) - ang_mat).T,
-                                    (2 * np.identity(3) + ang_mat).T, rcond=None)[0].T @ C
+                C = np.linalg.lstsq((2 * np.identity(3) - ang_mat).T, (2 * np.identity(3) + ang_mat).T, rcond=None)[
+                        0].T @ C
 
-                # correct position and velocity estimates
-                vel_n[:, i] -= vel_e
-                pos_n[:, i] -= pos_e
+                vel_n[i, :] -= v_e
+                pos_n[i, :] -= p_e
 
-            # smooth states
-            statef[i] = state[i]
-
-            if state[i] - state[i - 1] == 1:  # 0 (stance) -> 1 (swing)
-                # deal with false positive stance
-                if (i - start_stance) / fs <= min_stance_time:
-                    statef[start_stance:i] = 1
-                start_swing = i
-                wmax = 0
-
-            if np.linalg.norm(w[i, :]) > wmax:
-                wmax = np.linalg.norm(w[i, :])
-
-            if state[i] - state[i - 1] == -1:  # 1 (swing) -> 0 (stance)
-                # deal with false positive
-                if wmax < swing_thresh:
-                    statef[start_swing:i] = 0
-                start_stance = i
-
-            # Estimate and save the yaw of the sensor (different than direction of travel)
-            # unused here but potentially useful for orienting a GUI
             heading[i] = arctan2(C[1, 0], C[0, 0])
-            C_prev = C.copy()  # Save orientation estimate, required at start of main loop
+            C_prev = C.copy()
 
-            # compute horizontal distance
-            distance[i] = distance[i - 1] + np.sqrt((pos_n[0, i] - pos_n[0, i - 1]) ** 2 +
-                                                    (pos_n[1, i] - pos_n[0, i - 1]) ** 2)
+            distance[i] = distance[i - 1] + np.sqrt(
+                (pos_n[i, 0] - pos_n[i - 1, 0]) ** 2 + (pos_n[i, 1] - pos_n[i - 1, 1]) ** 2)
 
-        return acc_n, vel_n, pos_n, state, statef
+        return acc_n, vel_n, pos_n, distance
 
     # -------------------------------------------------------
     # ------- METHODS FOR CALCULATING GAIT PARAMETERS -------
     # -------------------------------------------------------
     @staticmethod
     def Step_Length(pos):
-        return pos[0, -1]
+        return pos[-1, 0]
 
     @staticmethod
     def Lateral_Deviation(pos):
-        return np.ptp(pos[1, :])
+        return np.ptp(pos[:, 1])
 
     @staticmethod
     def Step_Height(pos):
-        return np.max(pos[2, :])
+        return np.max(pos[:, 2])
 
     @staticmethod
     def Max_Swing_Velocity(vel):
@@ -686,7 +627,7 @@ class GaitParameters:
 
     @staticmethod
     def Foot_Attack_Angle(vel, ind):
-        return arctan2(vel[2, ind], vel[0, ind]) * 180/np.pi
+        return arctan2(vel[ind, 2], vel[ind, 0]) * 180/np.pi
 
     @staticmethod
     def Contact_Time(time, start, stop):
@@ -718,51 +659,55 @@ class GaitParameters:
                                                                            self.data[s][l]['gyro'][e][:, 1:],
                                                                            self.g[s][l], self.zt)
 
+                    zind[0:2] = True
+
                     self.a_n[s][l][e], \
                     self.v_n[s][l][e], \
-                    self.p_n[s][l][e], \
-                    state, statef = GaitParameters._kalman_filter(self.data[s][l]['accel'][e][:, 0],
-                                                                  self.data[s][l]['accel'][e][:, 1:],
-                                                                  self.data[s][l]['gyro'][e][:, 1:],
-                                                                  self.g[s][l], zind, self.mst, self.swt)
+                    self.p_n[s][l][e], _ = GaitParameters._kalman_filter(self.data[s][l]['accel'][e][:, 0],
+                                                                         self.data[s][l]['accel'][e][:, 1:],
+                                                                         self.data[s][l]['gyro'][e][:, 1:],
+                                                                         self.g[s][l], zind)
 
-                    f, ax = pl.subplots()
-                    ax.plot(self.data[s][l]['accel'][e][:, 0], self.p_n[s][l][e].T, '.-')
-                    ax.legend(['x', 'y', 'z'])
-                    ax.set_title(f'{s}: {l.split("""_""")[-1]} {e}')
-                    f.tight_layout()
+                    # f, ax = pl.subplots(2, figsize=(14, 9))
+                    # ax[1].plot(self.data[s][l]['accel'][e][:, 0], self.p_n[s][l][e])
+                    # ax[1].legend(['x', 'y', 'z'])
+                    # ax[1].plot(self.data[s][l]['accel'][e][zind, 0], self.p_n[s][l][e][zind, :], 'x')
+                    # ax[1].set_title(f'{s}: {l.split("""_""")[-1]} {e}')
+                    #
+                    # ax[0].plot(self.data[s][l]['accel'][e][:, 0], self.data[s][l]['accel'][e][:, 1:])
+                    # f.tight_layout()
 
                     for st in self.step[s][e]:
                         t = self.data[s][l]['accel'][e][st[0]:st[2], 0]
 
                         # rotate so step is in x direction
                         pca = PCA()
-                        pca.fit(self.p_n[s][l][e][:2, st[0]:st[2]].T)
+                        pca.fit(self.p_n[s][l][e][st[0]:st[2], :2])
                         coef = pca.components_
 
                         # create arrays
-                        pos_r = np.zeros_like(self.p_n[s][l][e][:, st[0]:st[2]])
-                        vel_r = np.zeros_like(self.p_n[s][l][e][:, st[0]:st[2]])
+                        pos_r = np.zeros_like(self.p_n[s][l][e][st[0]:st[2], :])
+                        vel_r = np.zeros_like(self.p_n[s][l][e][st[0]:st[2], :])
 
                         # assign rotated value to arrays
-                        pos_r[:2, :] = (self.p_n[s][l][e][:2, st[0]:st[2]].T @ coef.T).T
-                        pos_r[2, :] = self.p_n[s][l][e][2, st[0]:st[2]]
+                        pos_r[:, :2] = self.p_n[s][l][e][st[0]:st[2], :2] @ coef.T
+                        pos_r[:, 2] = self.p_n[s][l][e][st[0]:st[2], 2]
 
-                        vel_r[:2, :] = (self.v_n[s][l][e][:2, st[0]:st[2]].T @ coef.T).T
-                        vel_r[2, :] = self.v_n[s][l][e][2, st[0]:st[2]]
+                        vel_r[:, :2] = self.v_n[s][l][e][st[0]:st[2], :2] @ coef.T
+                        vel_r[:, 2] = self.v_n[s][l][e][st[0]:st[2], 2]
 
                         # correct position so x, y starts at origin with minimum z
-                        pos_r -= np.append(pos_r[:2, 0], min(pos_r[2, :])).reshape((3, 1)) * \
-                                 np.ones((1, len(pos_r[0, :])))
+                        pos_r -= np.append(pos_r[0, :2], min(pos_r[:, 2])).reshape((1, 3)) * \
+                                 np.ones((len(pos_r[:, 0]), 1))
 
                         # ensure that it is in the positive x-direction
-                        if pos_r[0, -1] < 0:
+                        if pos_r[-1, 0] < 0:
                             # rotate by 180 deg
                             R = np.array([[cos(np.pi), sin(np.pi), 0], [-sin(np.pi), cos(np.pi), 0], [0, 0, 1]])
 
                             # A'^T = A^T R => A' = R^T A
-                            pos_r = R.transpose() @ pos_r
-                            vel_r = R.transpose() @ vel_r
+                            pos_r = (R.T @ pos_r.T).T
+                            vel_r = (R.T @ vel_r.T).T
 
                         self.gait_params[s][l][e]['Step Length'].append(GaitParameters.Step_Length(pos_r))
                         self.gait_params[s][l][e]['Lateral Deviation'].append(GaitParameters.Lateral_Deviation(pos_r))
@@ -800,11 +745,40 @@ class GaitParameters:
 
         fid.close()
 
+    def subject_plots(self):
+        for s in ['1']:
+            f, ax = pl.subplots(4, figsize=(14, 8), sharex=True)
+
+            stp_len = [self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Step Length'],
+                       self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Step Length']]
+            ax[0].boxplot(stp_len)
+
+            stp_hgt = [self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Step Height'],
+                       self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Step Height']]
+            ax[1].boxplot(stp_hgt)
+
+            fca = [np.abs(self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Foot Attack Angle']),
+                   180-np.abs(self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Foot Attack Angle'])]
+            ax[2].boxplot(fca)
+
+            ct = [self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Contact Time'],
+                  self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Contact Time']]
+            ax[3].boxplot(ct)
+
+
+
+
 
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
 test._calibration_detect(still_time=6, plot=False)
-test._turn_detect(plot=False)
+test.data = test.raw_data.copy()
+# test._turn_detect(plot=False)
 test.step_detect(plot=False)
 test.process_data()
 test.export_gait_parameters('..\\..\\Data\\wt_results.csv')
+test.subject_plots()
+
+
+
+
