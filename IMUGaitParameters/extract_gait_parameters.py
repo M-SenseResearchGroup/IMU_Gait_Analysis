@@ -46,7 +46,7 @@ class GaitParameters:
 
         # TODO update parameter descriptions with more information
         # assign variables to class attributes
-        self.raw_data = data
+        self.data = data
         self.zt = z_thresh
         self.mst = min_stance_time
         self.swt = swing_thresh
@@ -56,42 +56,42 @@ class GaitParameters:
                            'Contact Time', 'Step Time', 'Cadence']  # list of gait parameters to extract
         self.ev_ord = ['Heavy Back', 'Light Back', 'Heavy Shoulder', 'Light Shoulder']  # order of bags
 
-        _subs = list(self.raw_data.keys())  # initial list of subjects
+        _subs = list(self.data.keys())  # initial list of subjects
 
         # check to make sure all subjects have the required sensors
         _sens_req = ['foot_left', 'foot_right', 'sacrum', 'shank_left', 'shank_right']  # required sensors
         for s in _subs:
-            _sens = list(self.raw_data[s].keys())  # get a list of the sensors for the subject
+            _sens = list(self.data[s].keys())  # get a list of the sensors for the subject
             _sens_good = all([any(i in j for j in _sens) for i in _sens_req])  # check for all required sensors
             if not _sens_good:
                 print(f'Removing subject {s} data due to missing required sensors.')
-                self.raw_data.pop(s)  # if missing required sensors, remove subject
+                self.data.pop(s)  # if missing required sensors, remove subject
 
-        _subs = list(self.raw_data.keys())  # update list of subjects
+        _subs = list(self.data.keys())  # update list of subjects
         # get the full names of required sensors
-        self.sens = np.array([se for se in self.raw_data[_subs[0]] if any(j in se for j in _sens_req)])
+        self.sens = np.array([se for se in self.data[_subs[0]] if any(j in se for j in _sens_req)])
 
         # check for equal number of events
         _data_check = []
         # keep a record of events for alt still period detection
         for s in _subs:
             # assume all sensors recorded the same events
-            _data_check.append(len([e for e in self.raw_data[s][self.sens[0]]['accel'].keys() if event_match in e]))
+            _data_check.append(len([e for e in self.data[s][self.sens[0]]['accel'].keys() if event_match in e]))
 
         self.n_ev = stats.mode(_data_check)[0][0]
         for i in range(len(_data_check)):
             if _data_check[i] < self.n_ev:
                 print(f'Removing subject {_subs[i]} data due to missing events.')
-                self.raw_data.pop(_subs[i])
+                self.data.pop(_subs[i])
 
-        self.subs = list(self.raw_data.keys())  # get final list of subjects
+        self.subs = list(self.data.keys())  # get final list of subjects
 
         # get a list of events of interest
-        self.events = [e for e in self.raw_data[self.subs[0]][self.sens[0]]['accel'].keys() if event_match in e]
+        self.events = [e for e in self.data[self.subs[0]][self.sens[0]]['accel'].keys() if event_match in e]
 
         # get a list of events for alternate still period detection
         if self.astill != '':
-            self.alt_events = [e for e in self.raw_data[self.subs[0]][self.sens[0]]['accel'].keys() if self.astill in e]
+            self.alt_events = [e for e in self.data[self.subs[0]][self.sens[0]]['accel'].keys() if self.astill in e]
         else:
             self.alt_events = None
 
@@ -100,36 +100,36 @@ class GaitParameters:
         maxa = []  # get a list of the maximum accelerations for all events
         maxw = []  # get a list of the maximum angular velocities for all events
         for s in self.subs:
-            for l in self.raw_data[s].keys():
-                for e in self.raw_data[s][l]['gyro'].keys():
-                    maxa.append(np.max(self.raw_data[s][l]['accel'][e][:, 1:]))
-                    maxw.append(np.max(self.raw_data[s][l]['gyro'][e][:, 1:]))
+            for l in self.data[s].keys():
+                for e in self.data[s][l]['gyro'].keys():
+                    maxa.append(np.max(self.data[s][l]['accel'][e][:, 1:]))
+                    maxw.append(np.max(self.data[s][l]['gyro'][e][:, 1:]))
 
         if max(maxa) < 15:  # if the maximum over all events is less than 15, convert to m/s^2
             for s in self.subs:
-                for l in self.raw_data[s].keys():
-                    for e in self.raw_data[s][l]['accel'].keys():
-                        self.raw_data[s][l]['accel'][e][:, 1:] *= 9.81
+                for l in self.data[s].keys():
+                    for e in self.data[s][l]['accel'].keys():
+                        self.data[s][l]['accel'][e][:, 1:] *= 9.81
 
         if max(maxw) > 50:  # if the maximum over all events is greater than 50, convert to rad/s
             for s in self.subs:
-                for l in self.raw_data[s].keys():
-                    for e in self.raw_data[s][l]['gyro'].keys():
-                        self.raw_data[s][l]['gyro'][e][:, 1:] *= np.pi/180
+                for l in self.data[s].keys():
+                    for e in self.data[s][l]['gyro'].keys():
+                        self.data[s][l]['gyro'][e][:, 1:] *= np.pi/180
 
         # ALLOCATE storage for future use
-        self.g = {i: {j: None for j in self.raw_data[i].keys()} for i in self.subs}  # standing gravity vector
-        self.data = {i: {j: {k: dict() for k in ['accel', 'gyro']} for j in self.raw_data[i].keys()} for i in self.subs}
+        self.g = {i: {j: None for j in self.data[i].keys()} for i in self.subs}  # standing gravity vector
+        self.turns = {i: {j: [] for j in self.events} for i in self.subs}  # turns
         self.stance = {i: dict() for i in self.subs}  # allocate storage for stance indices
         self.swing = {i: dict() for i in self.subs}  # allocate storage for swing indices
         self.step = {i: dict() for i in self.subs}  # allocate storage for step indices
-        self.a_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for nagivational acc
-        self.v_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational vel
-        self.p_n = {i: {j: dict() for j in self.raw_data[i].keys()} for i in self.subs}  # allocate for navigational pos
+        self.a_n = {i: {j: dict() for j in self.data[i].keys()} for i in self.subs}  # allocate for nagivational acc
+        self.v_n = {i: {j: dict() for j in self.data[i].keys()} for i in self.subs}  # allocate for navigational vel
+        self.p_n = {i: {j: dict() for j in self.data[i].keys()} for i in self.subs}  # allocate for navigational pos
         self.gait_params = {i: dict() for i in self.subs}  # gait parameters
 
     def _mean_stillness(self, bias, grav, i, ax, s, sensor, e, nst, plot):
-        mag = np.linalg.norm(self.raw_data[s][sensor]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
+        mag = np.linalg.norm(self.data[s][sensor]['gyro'][e][:, 1:], axis=1)  # ang. vel. magnitude
 
         # calculate moving mean
         _mm = np.cumsum(mag)
@@ -142,16 +142,16 @@ class GaitParameters:
         var = np.var(mag[mind - nst:mind])
 
         # store bias
-        for l in self.raw_data[s].keys():
-            bias[l][i, :] = np.median(self.raw_data[s][l]['gyro'][e][mind - nst:mind, 1:], axis=0)
-            grav[l][i, :] = np.median(self.raw_data[s][l]['accel'][e][mind - nst:mind, 1:], axis=0)
+        for l in self.data[s].keys():
+            bias[l][i, :] = np.median(self.data[s][l]['gyro'][e][mind - nst:mind, 1:], axis=0)
+            grav[l][i, :] = np.median(self.data[s][l]['accel'][e][mind - nst:mind, 1:], axis=0)
 
         if plot:
-            ax[i].plot(self.raw_data[s][sensor]['gyro'][e][:, 0], mag, label=r'$||\vec{\omega}||$')
-            ax[i].plot(self.raw_data[s][sensor]['gyro'][e][mind - nst:mind, 0], mag[mind - nst:mind], color='r',
+            ax[i].plot(self.data[s][sensor]['gyro'][e][:, 0], mag, label=r'$||\vec{\omega}||$')
+            ax[i].plot(self.data[s][sensor]['gyro'][e][mind - nst:mind, 0], mag[mind - nst:mind], color='r',
                        alpha=0.5, linewidth=5, label=rf'Min. mean, $\sigma^2$={var:.2e}')
             axt = ax[i].twinx()
-            axt.semilogy(self.raw_data[s][sensor]['gyro'][e][nst - 1:, 0], mm, color='orange')
+            axt.semilogy(self.data[s][sensor]['gyro'][e][nst - 1:, 0], mm, color='orange')
             axt.set_ylabel('Mean')
 
             ax[i].set_title(f'{e}')
@@ -182,7 +182,7 @@ class GaitParameters:
             print(f'Input still_time of {still_time}s is possibly too high to find a reliable still perdiod.')
 
         for s in self.subs:
-            fr = 1/(np.mean(np.diff(self.raw_data[s][sensor]['gyro'][self.events[0]][:, 0])))  # time in seconds
+            fr = 1/(np.mean(np.diff(self.data[s][sensor]['gyro'][self.events[0]][:, 0])))  # time in seconds
             fnyq = fr/2  # nyquist frequency
             n1 = int(round(fr))  # samples in 1 second
             nst = int(round(still_time * n1))  # samples in still_time seconds
@@ -191,8 +191,8 @@ class GaitParameters:
 
             if self.alt_events is not None:
                 # allocate storage for bias and gravity in each sensor
-                bias = {l: np.zeros((len(self.alt_events), 3)) for l in self.raw_data[s].keys()}
-                grav = {l: np.zeros((len(self.alt_events), 3)) for l in self.raw_data[s].keys()}
+                bias = {l: np.zeros((len(self.alt_events), 3)) for l in self.data[s].keys()}
+                grav = {l: np.zeros((len(self.alt_events), 3)) for l in self.data[s].keys()}
 
                 if plot:
                     f, ax = pl.subplots(len(self.alt_events), figsize=(14, 8))
@@ -206,8 +206,8 @@ class GaitParameters:
                     f.tight_layout(rect=[0, 0.03, 1, 0.95])
             else:
                 # allocate storage for bias and gravity in each sensor
-                bias = {l: np.zeros((self.n_ev, 3)) for l in self.raw_data[s].keys()}
-                grav = {l: np.zeros((self.n_ev, 3)) for l in self.raw_data[s].keys()}
+                bias = {l: np.zeros((self.n_ev, 3)) for l in self.data[s].keys()}
+                grav = {l: np.zeros((self.n_ev, 3)) for l in self.data[s].keys()}
 
                 if plot:
                     f, ax = pl.subplots(self.n_ev, figsize=(14, 8))
@@ -221,18 +221,18 @@ class GaitParameters:
                     f.tight_layout(rect=[0, 0.03, 1, 0.95])
 
             # remove bias from all sensors and events
-            for l in self.raw_data[s].keys():
+            for l in self.data[s].keys():
                 self.g[s][l] = np.mean(grav[l], axis=0)
-                for e in self.raw_data[s][l]['gyro'].keys():
-                    self.raw_data[s][l]['gyro'][e][:, 1:] -= np.mean(bias[l], axis=0)
+                for e in self.data[s][l]['gyro'].keys():
+                    self.data[s][l]['gyro'][e][:, 1:] -= np.mean(bias[l], axis=0)
 
         # converting to m/s^2 from g if necessary
         for s in self.subs:
-            for l in self.raw_data[s].keys():
+            for l in self.data[s].keys():
                 for e in self.events:
                     if np.linalg.norm(self.g[s][l]) < 4.9:
                         self.g[s][l] *= 9.81
-                        self.raw_data[s][l]['accel'][e][:, 1:] *= 9.81
+                        self.data[s][l]['accel'][e][:, 1:] *= 9.81
 
     def _turn_detect(self, plot=False):
         """
@@ -247,9 +247,8 @@ class GaitParameters:
                 f, ax = pl.subplots(self.n_ev, figsize=(14, 9))
                 f.suptitle(f'Subject: {s}')
 
-            events = []
             i = 0
-            fs = 1/np.mean(np.diff(self.raw_data[s][l]['accel'][self.events[0]][:, 0]))  # sampling frequency
+            fs = 1/np.mean(np.diff(self.data[s][l]['accel'][self.events[0]][:, 0]))  # sampling frequency
             fnyq = fs/2  # nyquist frequency
             tb, ta = signal.butter(2, .75/fnyq, 'lowpass')  # filter gyro data to see turns clearly
             for e in self.events:
@@ -257,8 +256,10 @@ class GaitParameters:
                 iz = np.argmax(abs(self.g[s][l])) + 1  # +1 because first index is time in raw data
 
                 # filter gyroscopic data
-                fd = abs(signal.filtfilt(tb, ta, self.raw_data[s][l]['gyro'][e][:, iz]))
+                fd = abs(signal.filtfilt(tb, ta, self.data[s][l]['gyro'][e][:, iz]))
                 mfd = np.mean(fd)  # mean of filtered data
+
+                nfd = len(fd)  # length of data
 
                 # find peak indices in the filtered data
                 _ips = signal.argrelmax(fd, order=63, mode='wrap')
@@ -290,38 +291,36 @@ class GaitParameters:
                 peaks = np.asarray(peaks)
                 tpts = np.asarray(tpts)
 
-                for loc in self.raw_data[s].keys():
+                for loc in self.data[s].keys():
                     for imu in ['gyro', 'accel']:
                         if len(tpts) == 2:
-                            self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:tpts[0], :]
-                            self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[1]:, :]
+                            self.turns[s][e].append((tpts[0], tpts[1]))
                         elif len(tpts) == 3:
                             if tpts[0] < peaks[0]:
-                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:tpts[0], :]
-                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[1]:tpts[2], :]
+                                self.turns[s][e].append((tpts[0], tpts[1]))
+                                self.turns[s][e].append((tpts[2], nfd-1))
                             else:
-                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][tpts[0]:tpts[1], :]
-                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[2]:, :]
+                                self.turns[s][e].append((0, tpts[0]))
+                                self.turns[s][e].append((tpts[1], tpts[2]))
                         elif len(tpts) == 4:
                             if tpts[0] > peaks[0] and tpts[0] < peaks[1]:
-                                self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][tpts[0]:tpts[1], :]
-                                self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[2]:tpts[3], :]
+                                self.turns[s][e].append((0, tpts[0]))
+                                self.turns[s][e].append((tpts[1], tpts[2]))
+                                self.turns[s][e].append((tpts[3], nfd-1))
                             elif tpts[-1] > peaks[-1]:
                                 if tpts[0] < peaks[0]:
-                                    self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][:tpts[0], :]
-                                    self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[1]:tpts[2], :]
+                                    self.turns[s][e].append((tpts[0], tpts[1]))
+                                    self.turns[s][e].append((tpts[2], tpts[3]))
                                 else:
-                                    self.data[s][loc][imu][e + '-1'] = self.raw_data[s][loc][imu][e][tpts[0]:tpts[1], :]
-                                    self.data[s][loc][imu][e + '-2'] = self.raw_data[s][loc][imu][e][tpts[2]:, :]
-
-                events.append(e + '-1')
-                events.append(e + '-2')
+                                    self.turns[s][e].append((0, tpts[0]))
+                                    self.turns[s][e].append((tpts[1], tpts[2]))
+                                    self.turns[s][e].append((tpts[3], nfd-1))
 
                 if plot:
-                    # ax[i].plot(self.raw_data[s][l]['gyro'][e][:, 0], self.raw_data[s][l]['gyro'][e][:, iz])
-                    ax[i].plot(self.raw_data[s][l]['gyro'][e][:, 0], fd)
-                    ax[i].plot(self.raw_data[s][l]['gyro'][e][peaks, 0], fd[peaks], 'ro')
-                    ax[i].plot(self.raw_data[s][l]['gyro'][e][tpts, 0], fd[tpts], 'k+')
+                    # ax[i].plot(self.data[s][l]['gyro'][e][:, 0], self.data[s][l]['gyro'][e][:, iz])
+                    ax[i].plot(self.data[s][l]['gyro'][e][:, 0], fd)
+                    ax[i].plot(self.data[s][l]['gyro'][e][peaks, 0], fd[peaks], 'ro')
+                    ax[i].plot(self.data[s][l]['gyro'][e][tpts, 0], fd[tpts], 'k+')
                     for p in ['-1', '-2']:
                         ax[i].plot(self.data[s][l]['gyro'][e+p][:, 0], self.data[s][l]['gyro'][e+p][:, iz], color='red',
                                    alpha=0.4, linewidth=2)
@@ -329,9 +328,6 @@ class GaitParameters:
                     ax[i].set_title(f'{e}')
 
                 i += 1
-
-        self.events = events  # change events to include the split events
-        self.n_ev = len(self.events)  # update number of events
 
     def step_detect(self, plot=False):
         """
@@ -650,7 +646,7 @@ class GaitParameters:
         sensors = ['dorsal_foot_right', 'dorsal_foot_left']
 
         # TODO change back to all subjects
-        for s in ['1']:  # self.subs:
+        for s in self.subs:
             for l in sensors:
                 self.gait_params[s][l] = dict()
                 for e in self.events:
@@ -674,10 +670,25 @@ class GaitParameters:
                     # ax[1].plot(self.data[s][l]['accel'][e][zind, 0], self.p_n[s][l][e][zind, :], 'x')
                     # ax[1].set_title(f'{s}: {l.split("""_""")[-1]} {e}')
                     #
-                    # ax[0].plot(self.data[s][l]['accel'][e][:, 0], self.data[s][l]['accel'][e][:, 1:])
+                    # ax[0].plot(self.data[s]['sacrum']['gyro'][e][:, 0], self.data[s]['sacrum']['gyro'][e][:, 2])
+                    #
+                    # for tu in self.turns[s][e]:
+                    #     ax[0].plot(self.data[s]['sacrum']['gyro'][e][tu[0]:tu[1], 0],
+                    #                self.data[s]['sacrum']['gyro'][e][tu[0]:tu[1], 2], color='r', alpha=0.4, linewidth=5)
+                    #     ax[1].plot(self.data[s][l]['accel'][e][tu[0]:tu[1], 0], self.p_n[s][l][e][tu[0]:tu[1], :],
+                    #                color='r', alpha=0.4, linewidth=4)
                     # f.tight_layout()
 
+                    # create a list of indices where a turn is occurring
+                    turn_range = np.array([], dtype=int)
+                    for tu in self.turns[s][e]:
+                        turn_range = np.append(turn_range, np.arange(tu[0], tu[1]))
+
+                    # iterate through the detected steps
                     for st in self.step[s][e]:
+                        # if a step starts or ends during a turn, skip it
+                        if st[0] in turn_range or st[2] in turn_range:
+                            continue
                         t = self.data[s][l]['accel'][e][st[0]:st[2], 0]
 
                         # rotate so step is in x direction
@@ -746,7 +757,7 @@ class GaitParameters:
         fid.close()
 
     def subject_plots(self):
-        for s in ['1']:
+        for s in self.subs:
             f, ax = pl.subplots(4, figsize=(14, 8), sharex=True)
 
             stp_len = [self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Step Length'],
@@ -757,8 +768,8 @@ class GaitParameters:
                        self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Step Height']]
             ax[1].boxplot(stp_hgt)
 
-            fca = [np.abs(self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Foot Attack Angle']),
-                   180-np.abs(self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Foot Attack Angle'])]
+            fca = [self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Foot Attack Angle'],
+                   self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Foot Attack Angle']]
             ax[2].boxplot(fca)
 
             ct = [self.gait_params[s]['dorsal_foot_right']['Walk and Turn 1']['Contact Time'],
@@ -766,14 +777,10 @@ class GaitParameters:
             ax[3].boxplot(ct)
 
 
-
-
-
 raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
 test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
 test._calibration_detect(still_time=6, plot=False)
-test.data = test.raw_data.copy()
-# test._turn_detect(plot=False)
+test._turn_detect(plot=False)
 test.step_detect(plot=False)
 test.process_data()
 test.export_gait_parameters('..\\..\\Data\\wt_results.csv')
