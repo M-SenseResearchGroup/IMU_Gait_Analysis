@@ -2,13 +2,10 @@ from matplotlib import pyplot as pl
 from matplotlib.patches import Patch
 from scipy import signal
 import numpy as np
-from numpy import sin, cos, arcsin, arccos, arctan, arctan2
+from numpy import sin, cos, arcsin, arctan, arctan2
 from scipy import stats
 import pywt  # pywavelets
 from sklearn.decomposition import PCA
-import sys
-sys.path.append("C:\\Users\\Lukas Adamowicz\\Dropbox\\Masters\\MC10py")
-import MC10py
 
 
 class GaitParameters:
@@ -17,8 +14,7 @@ class GaitParameters:
      both shanks, and the sacrum
     """
 
-    def __init__(self, data, z_thresh=1.25, min_stance_time=0.03, swing_thresh=2, event_match='', alt_still='',
-                 turn_split=False, turn_kwargs={}):
+    def __init__(self, data, z_thresh=1.25, min_stance_time=0.03, swing_thresh=2, event_match='', alt_still=''):
         """
         Parameters
         ----------
@@ -36,12 +32,6 @@ class GaitParameters:
             Str to search for in the event type to use only certain events.  Default is '' (no event exclusion)
         alt_still : str, optional
             Alternate event to use for still periods for gyroscope bias removal.  Default is '' (use chosen events)
-        turn_split : bool, optional
-            Perform turn detection and segmentation.  This will remove time spent turning around from the data.
-            Default is False
-        turn_kwargs : dict, optional
-            Optional turn detection keywords.  Keyword 'plot : bool, optional' determines whether or not data is
-            plotted showing detected turns and removed data.
         """
 
         # TODO update parameter descriptions with more information
