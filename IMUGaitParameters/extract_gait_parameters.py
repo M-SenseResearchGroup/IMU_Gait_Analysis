@@ -776,10 +776,11 @@ class GaitParameters:
                   self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Contact Time']]
             ax[3].boxplot(ct)
 
-    def Run(self, save_loc, still_time=6):
+    def Run(self, save_loc, still_time=6, turn=True):
         # test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
         self._calibration_detect(still_time=still_time, plot=False)
-        self._turn_detect(plot=False)
+        if turn:
+            self._turn_detect(plot=False)
         self.step_detect(plot=False)
         self.process_data()
         self.export_gait_parameters(save_loc)
