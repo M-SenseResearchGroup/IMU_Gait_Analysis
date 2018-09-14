@@ -776,15 +776,13 @@ class GaitParameters:
                   self.gait_params[s]['dorsal_foot_left']['Walk and Turn 1']['Contact Time']]
             ax[3].boxplot(ct)
 
-
-raw_data = MC10py.OpenMC10('C:\\Users\\Lukas Adamowicz\\Documents\\Study Data\\EMT\\ASYM_OFFICIAL\\data.pickle')
-test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
-test._calibration_detect(still_time=6, plot=False)
-test._turn_detect(plot=False)
-test.step_detect(plot=False)
-test.process_data()
-test.export_gait_parameters('..\\..\\Data\\wt_results.csv')
-test.subject_plots()
+    def Run(self, save_loc, still_time=6):
+        # test = GaitParameters(raw_data, event_match='Walk and Turn', alt_still='Blind Standing')
+        self._calibration_detect(still_time=still_time, plot=False)
+        self._turn_detect(plot=False)
+        self.step_detect(plot=False)
+        self.process_data()
+        self.export_gait_parameters(save_loc)
 
 
 
