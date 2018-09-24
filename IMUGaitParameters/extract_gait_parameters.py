@@ -172,7 +172,7 @@ class GaitParameters:
             print(f'Input still_time of {still_time}s is possibly too high to find a reliable still perdiod.')
 
         for s in self.subs:
-            fr = 1/(np.mean(np.diff(self.data[s][sensor]['gyro'][self.events[0]][:, 0])))  # time in seconds
+            fr = 1/(np.mean(np.diff(self.data[s][sensor]['accel'][self.events[0]][:, 0])))  # time in seconds
             fnyq = fr/2  # nyquist frequency
             n1 = int(round(fr))  # samples in 1 second
             nst = int(round(still_time * n1))  # samples in still_time seconds
