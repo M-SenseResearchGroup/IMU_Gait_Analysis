@@ -731,8 +731,7 @@ class GaitParameters:
 
         fid.write(hdr + '\n')  # write the header plus a new line indicator
 
-        # TODO change back to all subjects
-        for s in ['1', '2']:  # self.subs:
+        for s in self.subs:
             for l in self.gait_params[s].keys():
                 for e in self.events:
                     f = l.split('_')[-1]  # get foot side, left or right
